@@ -67,7 +67,7 @@ def plot_spectrogram(sig, sr, fname, window=None, hop=None, n_fft=2048, power=1.
         hop=hop,
         window=window, 
         power=power)
-
+    
     spec_db = amplitude_to_db(spec_amp, ref=torch.max)
 
     plot_spec_db(spec_db, t, f, fname)

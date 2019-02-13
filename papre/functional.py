@@ -58,7 +58,7 @@ def _mel_to_hertz(mel):
 
 def melspectrogram(sig, sr, n_fft=2048, hop=None, window=None, power=1.0, **kwargs):
     """
-    returns melspectrogram
+    returns Melspectrogram
     """
     spec_amp = spectrogram(sig, n_fft, hop, window, power=power, **kwargs)
     mel_fb, _ = create_mel_filter(spec_amp.size(-1), sr, **kwargs)
@@ -95,7 +95,7 @@ def create_mel_filter(n_stft, sr, n_mels=128, f_min=0.0, f_max=None):
 
 def amplitude_to_db(spec, ref=1.0, amin=1e-10, top_db=80.0):
     """
-    magnitude scaling
+    Amplitude spectrogram to the db scale
     """
     power = spec**2
     return power_to_db(power, ref, amin, top_db)
@@ -103,12 +103,14 @@ def amplitude_to_db(spec, ref=1.0, amin=1e-10, top_db=80.0):
 
 def power_to_db(spec, ref=1.0, amin=1e-10, top_db=80.0):
     """
-    magnitude scaling
+    Power spectrogram to the db scale
+
+    spec -> (time, freq, complex) or (time, freq)
     """
     if amin <= 0:
         raise ParameterError('amin must be strictly positive')
 
-    if spec.shape[-1] == 2: # obv make this better
+    if spec.size(-1) == 2: # obv make this better
         spec_norm = torch.norm(spec, p=2, dim=-1)
     else:
         spec_norm = spec
@@ -128,7 +130,14 @@ def power_to_db(spec, ref=1.0, amin=1e-10, top_db=80.0):
     
     return log_spec
     
+
+def db_to_power(spec_db, ref=1.0):
+    """
+    """
     
+    return ref * torch.pow(10., spec_db * 0.1) 
+
+
 def pseudo_cqt():
     """computing pseudo-cqt
     """

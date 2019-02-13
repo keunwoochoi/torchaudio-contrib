@@ -15,7 +15,7 @@ It's a similar idea to [kapre](https://github.com/keunwoochoi/kapre), where the 
 
 
 ## Usage
-Plotting the *Spectrogram* and *MelSpectrogram* of a signal.
+Plotting the *Spectrogram* and *Melspectrogram* of a signal.
 ```python
 import torch, librosa
 from utils import plot_melspectrogram, plot_spectrogram
@@ -40,13 +40,13 @@ plot_melspectrogram(y, sr, 'mel_spec.png', torch.hann_window(win_length), hop_le
 Using a *Spectrogram* layer in a module is then as easy as:
 ```python
 import torch, librosa
-from papre import MelSpectrogram
+from papre import Melspectrogram
 
 class AudioNN(torch.nn.Module):
 
     def __init__(self, hop, n_fft, n_mels):
         super(AudioNN, self).__init__()
-        self.spec = MelSpectrogram(hop=hop, n_fft=n_fft, n_mels=n_mels)
+        self.spec = Melspectrogram(hop=hop, n_fft=n_fft, n_mels=n_mels)
         self.lin = torch.nn.Linear(n_mels, 10)
 
     def forward(self, x):
@@ -69,9 +69,10 @@ model = AudioNN(hop=hop, n_fft=n_fft, n_mels=n_mels).cuda()
 print(model)
 
 >> AudioNN(
->>  (spec): Spectrogram()
->>  (lin): Linear(in_features=1025, out_features=10, bias=True)
->>)
+>> (spec): Melspectrogram()
+>> (lin): Linear(in_features=128, out_features=10, bias=True)
+>> )
+
 
 spec = model(sig)
 print(spec.shape, spec.is_cuda)
@@ -80,11 +81,11 @@ print(spec.shape, spec.is_cuda)
 
 ```
 
-*MaskConv2d* wraps [nn.Conv2d](https://pytorch.org/docs/stable/nn.html#torch.nn.Conv2d) so that images of different height (or in this case spectrograms of different sequence length) can be passed and the intra batch lengths are not lost. Convolutional layers can then be be connected to recurrent layers like:
+*MaskConv2d* wraps [nn.Conv2d](https://pytorch.org/docs/stable/nn.html#torch.nn.Conv2d) so that images of different height (or in this case spectrograms of different sequence length) can be passed and the intra batch lengths are not lost. Convolutional layers can then be connected to recurrent layers like:
 
 ```python
 import torch
-from papre import Spectrogram, MelSpectrogram, MaskConv2d
+from papre import Spectrogram, MaskConv2d
 
 class AudioModule(torch.nn.Module):
 
@@ -103,23 +104,25 @@ class AudioModule(torch.nn.Module):
         
         # Compute Spectrogram given padded sequence
         x, lengths = self.spec(x, lengths)
-
         # Compute conv given padded sequence
         x, lengths = self.conv(x, lengths)
-        x = x.transpose(1,2).contiguous().view(x.size(0), x.size(2), -1) 
+
+        # Reshape
+        batch_dim, _, time_dim = x.size()[:3]
+        # x.shape -> (batch, hop, conv_filters * freq)
+        x = x.transpose(1,2).reshape(batch_dim, time_dim, -1) 
 
         # Pack sequence for lstm processing
         x_pack = torch.nn.utils.rnn.pack_padded_sequence(x, lengths, batch_first=True)
         x_pack, _ = self.lstm(x_pack)
         x, lengths = torch.nn.utils.rnn.pad_packed_sequence(x_pack, batch_first=True)
         
-        # Many-to-one rnn
+        # Many-to-one rnn, x.shape -> (batch, lstm_out)
         x = x[torch.arange(x.size(0)),lengths - 1]
         
         x = self.lin(x)
         x = torch.nn.functional.log_softmax(x, dim=1)
         return x
-
 
 n_fft = 2048
 hop = 512

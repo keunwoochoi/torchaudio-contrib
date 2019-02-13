@@ -67,7 +67,7 @@ class Spectrogram(nn.Module):
     
 
     def _out_seq_dim(self, arr): 
-        return arr//self.hop
+        return arr//self.hop+1
 
     def forward(self, x, lengths=None):
         """
@@ -80,7 +80,7 @@ class Spectrogram(nn.Module):
         assert x.dim() == 3
 
         batch, channel, _ = x.size()
-        x = x.view(batch*channel, -1) # (batch*channel, signal)
+        x = x.reshape(batch*channel, -1) # (batch*channel, signal)
 
         if self.pad > 0:
             with torch.no_grad():
@@ -92,15 +92,15 @@ class Spectrogram(nn.Module):
             window=self.window,
             **self.spec_kwargs)
 
-        spec = spec.view(batch, channel, -1, self.n_fft//2 + 1)
-
-        if lengths is not None:
-            assert lengths.size(0) == x.size(0)
+        spec = spec.contiguous().view(batch, channel, -1, self.n_fft//2 + 1)
+        
+        if lengths is not None:            
+            assert spec.size(0) == lengths.size(0)
             return spec, self._out_seq_dim(lengths)
         return spec
 
 
-class MelSpectrogram(Spectrogram):
+class Melspectrogram(Spectrogram):
     """
     Module that outputs the mel-spectrogram (transform on the spectrogram
     to better represent human perception) of an audio signal with output 
@@ -137,7 +137,7 @@ class MelSpectrogram(Spectrogram):
 
     def __init__(self, hop=None, n_mels=128, n_fft=2048, pad=0, window=None, sr=44100, **spec_kwargs):
         
-        super(MelSpectrogram, self).__init__(hop, n_fft, pad, window, sr, **spec_kwargs)
+        super(Melspectrogram, self).__init__(hop, n_fft, pad, window, sr, **spec_kwargs)
 
         self.n_mels = n_mels
         self.mel_fb, self.mel_freq_vals = self._build_filter()
@@ -154,20 +154,13 @@ class MelSpectrogram(Spectrogram):
             
     def forward(self, x, lengths=None):
 
-        spec = super(MelSpectrogram, self).forward(x)
+        spec = super(Melspectrogram, self).forward(x)
         spec = torch.matmul(spec, self.mel_fb)
 
         if lengths is not None:
             return spec, self._out_seq_dim(lengths)
         return spec
 
-
-
-class MaskConv1d(nn.Conv1d):
-    """
-    Allow Conv1d to work with sequence data (or different height images).
-    """
-    pass
 
 
 class MaskConv2d(nn.Conv2d):
