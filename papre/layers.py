@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .functional import spectrogram, create_mel_filter, _get_freq_values
+from .functional import spectrogram, create_mel_filter
 
 
 class Spectrogram(nn.Module):
@@ -16,7 +16,7 @@ class Spectrogram(nn.Module):
     on GPU) and no need to store the transforms. More information:
         - https://github.com/keunwoochoi/kapre
         - https://arxiv.org/pdf/1706.05781.pdf
-    
+
     Args:
      * hop: int > 0
        - Hop length between frames in sample,  should be <= n_fft.
@@ -33,13 +33,16 @@ class Spectrogram(nn.Module):
      * sr: int > 0
        -  Sampling rate of the audio signal. This may not be the same in all samples (?)
        -  Default: 44100
+     * power: int = 1,2,None
+       - power to normalize the spectrogram to, make None to work with complex stft
+       - Default: 1
      * spec_kwargs: 
        -  Any named arguments to be passed to the stft
 
     """
 
     def __init__(self, hop=None, n_fft=2048, pad=0, window=None, sr=44100, **spec_kwargs):
-        
+
         super(Spectrogram, self).__init__()
 
         if window is None:
@@ -51,10 +54,8 @@ class Spectrogram(nn.Module):
         self.pad = pad
 
         # Not all samples will have the same sr
-        self.freq_vals = _get_freq_values(n_fft, sr)
         self.sr = sr
         self.spec_kwargs = spec_kwargs
-
 
     def _build_window(self, window):
         if window is None:
@@ -64,53 +65,40 @@ class Spectrogram(nn.Module):
         # In order for the window to be added as one of the Module's
         # parameters it has to be a nn.Parameter
         return nn.Parameter(window, requires_grad=False)
-    
 
-    def _out_seq_dim(self, arr): 
+    def _out_seq_dim(self, arr):
         return arr//self.hop+1
 
     def forward(self, x, lengths=None):
         """
-        If x is a padded tensor then lengths should have the 
-        corresponding sequence length for every element in the batch.
-
-        Input: (batch, channel, signal)
-        Output:(batch, channel, time_hop, frequency_bins)
+        Input Tensor shape -> (batch, channel, signal)
+        Output Tensor shape -> (batch, channel, freq, time) or
+            (batch, channel, freq, time, complex) if power=None
         """
-        assert x.dim() == 3
-
-        batch, channel, _ = x.size()
-        x = x.reshape(batch*channel, -1) # (batch*channel, signal)
 
         if self.pad > 0:
             with torch.no_grad():
                 x = F.pad(x, (self.pad, self.pad), "constant")
 
         spec = spectrogram(x,
-            n_fft=self.n_fft,
-            hop=self.hop, 
-            window=self.window,
-            **self.spec_kwargs)
+                    n_fft=self.n_fft,
+                    hop=self.hop,
+                    window=self.window,
+                    **self.spec_kwargs)
 
-        spec = spec.contiguous().view(batch, channel, -1, self.n_fft//2 + 1)
-        
-        if lengths is not None:            
-            assert spec.size(0) == lengths.size(0)
-            return spec, self._out_seq_dim(lengths)
         return spec
 
 
 class Melspectrogram(Spectrogram):
     """
     Module that outputs the mel-spectrogram (transform on the spectrogram
-    to better represent human perception) of an audio signal with output 
-    shape (batch, channel, time_hop, frequency_bins).
+    to better represent human perception) of an audio signal.
 
-    Its implemented as a layer so that the computation can be faster (done dynamically
+    It's implemented as a layer so that the computation can be faster (done dynamically
     on GPU) and no need to store the transforms. More information:
         - https://github.com/keunwoochoi/kapre
         - https://arxiv.org/pdf/1706.05781.pdf
-    
+
     Args:
      * hop: int > 0
        - Hop length between frames in sample,  should be <= n_fft.
@@ -136,8 +124,9 @@ class Melspectrogram(Spectrogram):
     """
 
     def __init__(self, hop=None, n_mels=128, n_fft=2048, pad=0, window=None, sr=44100, **spec_kwargs):
-        
-        super(Melspectrogram, self).__init__(hop, n_fft, pad, window, sr, **spec_kwargs)
+
+        super(Melspectrogram, self).__init__(
+            hop, n_fft, pad, window, sr, **spec_kwargs)
 
         self.n_mels = n_mels
         self.mel_fb, self.mel_freq_vals = self._build_filter()
@@ -145,45 +134,18 @@ class Melspectrogram(Spectrogram):
     def _build_filter(self):
         # Get the mel filter matrix and the mel frequency values
         mel_fb, mel_f = create_mel_filter(
-                                    len(self.freq_vals),
-                                    self.sr, 
-                                    n_mels=self.n_mels)
-        # Cast filter matrix as nn.Parameter so it's loaded on model's device 
+            self.n_fft//2 + 1,
+            self.sr,
+            n_mels=self.n_mels)
+        # Cast filter matrix as nn.Parameter so it's loaded on model's device
         return nn.Parameter(mel_fb, requires_grad=False), mel_f
 
-            
-    def forward(self, x, lengths=None):
+    def forward(self, x):
+        """
+        Input Tensor shape -> (batch, channel, signal)
+        Output Tensor shape -> (batch, channel, mel_freq, time)
+        """
 
         spec = super(Melspectrogram, self).forward(x)
-        spec = torch.matmul(spec, self.mel_fb)
-
-        if lengths is not None:
-            return spec, self._out_seq_dim(lengths)
+        spec = torch.matmul(spec.transpose(2, 3), self.mel_fb).transpose(2, 3)
         return spec
-
-
-
-class MaskConv2d(nn.Conv2d):
-    """
-    Allow Conv2d to work with sequence data (or different height images).
-
-    Expects (batch, channel, sequence, feature)
-    """
-    def __init__(self, *args_conv2d, **kwargs_conv2d):
-        super(MaskConv2d, self).__init__(*args_conv2d, **kwargs_conv2d)
-
-
-    def _out_dim(self, arr, dim=0):
-        p = self.padding[dim]
-        d = self.dilation[dim]
-        k = self.kernel_size[dim]
-        s = self.stride[dim]
-        return (arr + 2*p - d*(k-1)-1)//s + 1
-
-
-    def forward(self, x_pad, lengths):
-
-        x_pad = super(MaskConv2d, self).forward(x_pad)
-        lengths = self._out_dim(lengths)
-
-        return x_pad, lengths
