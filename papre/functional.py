@@ -81,12 +81,12 @@ def _mel_to_hertz(mel):
     return 700. * (10**(mel / 2595.) - 1.)
 
 
-def melspectrogram(sig, sr, n_fft=2048, hop=None, window=None, power=1.0, **kwargs):
+def melspectrogram(sig, n_mels=128, sr=44100, n_fft=2048, hop=None, window=None, **kwargs):
     """
     returns Melspectrogram
     """
-    spec_amp = spectrogram(sig, n_fft, hop, window, power=power, **kwargs)
-    mel_fb, _ = create_mel_filter(spec_amp.size(-1), sr, **kwargs)
+    spec_amp = spectrogram(sig, n_fft, hop, window, power=1)
+    mel_fb, _ = create_mel_filter(spec_amp.size(-1), sr, n_mels, **kwargs)
     mel_spec_amp = torch.matmul(spec_amp, mel_fb)
     return mel_spec_amp
 
@@ -125,7 +125,7 @@ def amplitude_to_db(spec, ref=1.0, amin=1e-10, top_db=80.0):
     """
     Amplitude spectrogram to the db scale
 
-    Input Tensor shape -> (freq, time, complex) or (freq, time)
+    Input Tensor shape -> (freq, time)
     Output Tensor shape -> (freq, time)
     """
     power = spec**2
@@ -136,23 +136,18 @@ def power_to_db(spec, ref=1.0, amin=1e-10, top_db=80.0):
     """
     Power spectrogram to the db scale
 
-    Input Tensor shape -> (freq, time, complex) or (freq, time)
+    Input Tensor shape -> (freq, time)
     Output Tensor shape -> (freq, time)
     """
     if amin <= 0:
         raise ParameterError('amin must be strictly positive')
-
-    if spec.dim() == 3:
-        spec_norm = spec.pow(2).sum(-1)
-    else:
-        spec_norm = spec
 
     if callable(ref):
         ref_value = ref(spec_norm)
     else:
         ref_value = torch.tensor(ref)
 
-    log_spec = 10*torch.log10(torch.clamp(spec_norm, min=amin))
+    log_spec = 10*torch.log10(torch.clamp(spec, min=amin))
     log_spec -= 10*torch.log10(torch.clamp(ref_value, min=amin))
 
     if top_db is not None:
