@@ -168,6 +168,22 @@ def db_to_power(spec_db, ref=1.0):
     return ref * torch.pow(10., spec_db * 0.1)
 
 
+def angle(tensor):
+    """ 
+    Return angle of a complex tensor with shape (*, 2).
+    """
+    return torch.atan2(tensor[...,1], tensor[...,0])
+
+
+def magphase(spec, power=1.):
+    """
+    Separate a complex-valued spectrogram with shape (*,2)
+    into its magnitude and phase.
+    """
+    mag = spec.pow(2).sum(-1).pow(power/2)
+    phase = angle(spec)
+    return mag, phase
+
 def phase_vocoder(spec, rate, hop, n_fft):
     """
     Phase vocoder. Given a STFT tensor, speed up in time 
@@ -185,7 +201,7 @@ def phase_vocoder(spec, rate, hop, n_fft):
 
     alphas = (time_steps % 1)  # .unsqueeze(1) # (new_time)
 
-    phase_0 = torch.atan2(spec[:, :, :, :1, 1], spec[:, :, :, :1, 0])
+    phase_0 = angle(spec[:, :, :, :1])
 
     # Time Padding
     pad_shape = [0, 0]+[0, 2]+[0]*6
@@ -194,10 +210,8 @@ def phase_vocoder(spec, rate, hop, n_fft):
     spec_0 = spec[:, :, :, time_steps.long()]  # (new_time, freq, 2)
     spec_1 = spec[:, :, :, (time_steps + 1).long()]  # (new_time, freq, 2)
 
-    spec_0_angle = torch.atan2(
-        spec_0[..., 1], spec_0[..., 0])  # (new_time, freq)
-    spec_1_angle = torch.atan2(
-        spec_1[..., 1], spec_1[..., 0])  # (new_time, freq)
+    spec_0_angle = angle(spec_0) # (new_time, freq)
+    spec_1_angle = angle(spec_1) # (new_time, freq)
 
     spec_0_norm = torch.norm(spec_0, dim=-1)  # (new_time, freq)
     spec_1_norm = torch.norm(spec_1, dim=-1)  # (new_time, freq)
