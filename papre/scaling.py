@@ -15,14 +15,15 @@ class AmplitudeToDb(nn.Module):
         super(AmplitudeToDb, self).__init__()
         self.ref = nn.Parameter(ref, requires_grad=False)
         self.amin = nn.Parameter(amin, requires_grad=False)
-        assert ref > amin, "Reference value is expected to be bigger than"
+        assert ref > amin, "Reference value is expected to be bigger than amin, but I have" \
+                           "ref:{} and amin:{}".format(ref, amin)
 
     def forward(self, x):
         """
         :param x: torch.tensor, expectedly non-negative.
         :return: decibel-scaled x in the same shape
         """
-        return amplitude_to_db(x, self.ref, self.amin)
+        return amplitude_to_db(x, ref=self.ref, amin=self.amin)
 
 
 def amplitude_to_db(x, ref=1.0, amin=1e-7):
@@ -37,3 +38,43 @@ def amplitude_to_db(x, ref=1.0, amin=1e-7):
     """
     x = torch.clamp(x, min=amin)
     return 10.0 * (torch.log10(x) - torch.log10(torch.tensor(ref, device=x.device)))
+
+
+class DbToAmplitude():
+    """A layer that applies *inverse* decibel mapping (10-base logarithmic scaling)"""
+
+    def __init__(self, ref=1.0):
+        """
+
+        :param ref:
+        """
+        super(DbToAmplitude, self).__init__()
+        self.ref = nn.Parameter(ref, requires_grad=False)
+
+    def forward(self, x):
+        """
+
+        :param x:
+        :return:
+        """
+        return db_to_amplitude(x, ref=self.ref)
+
+
+def db_to_amplitude(x, ref=1.0):
+    """
+
+    :param x:
+    :param ref:
+    :return:
+    """
+    return torch.pow(10.0, x / 10.0 + torch.log10(torch.tensor(ref, device=x.device)))
+
+
+if __name__ == "__main__":
+    # a super quick test for amplitude <-> db
+    x = torch.tensor([0.1, 1., 10., 100., 1000.])
+    print("Input x:", x)
+    x_db = amplitude_to_db(x)
+    print("  * decibel: ", x_db)
+    x_recon = db_to_amplitude(x_db)
+    print("  * recon  : ", x_recon)
