@@ -70,11 +70,65 @@ def db_to_amplitude(x, ref=1.0):
     return torch.pow(10.0, x / 10.0 + torch.log10(torch.tensor(ref, device=x.device)))
 
 
+class MuLawEncoding(nn.Module):
+    """Apply mu-law encoding to the input tensor"""
+
+    def __init__(self, n_quantize=256):
+        super(MuLawEncoding, self).__init__()
+        self.nq = nn.Parameter(n_quantize)
+
+    def forward(self, x):
+        """
+
+        :param x: torch.tensor
+        :return:
+        """
+        return mu_law_encoding(x, self.nq)
+
+
+def mu_law_encoding(x, n_quantize=256):
+    if not x.dtype.is_floating_point:
+        x = x.to(torch.float)
+    mu = torch.tensor(n_quantize - 1, dtype=x.dtype)  # confused about dtype here..
+
+    x_mu = x.sign() * torch.log1p(mu * x.abs()) / torch.log1p(mu)
+    x_mu = ((x_mu + 1) / 2 * mu + 0.5).long()
+    return x_mu
+
+
+class MuLawDecoding(nn.Module):
+    """Apply mu-law decoding (expanding) to the input tensor"""
+
+    def __init__(self, n_quantize=256):
+        super(MuLawDecoding, self).__init__()
+        self.nq = nn.Parameter(n_quantize)
+
+    def forward(self, x_mu):
+        return mu_law_decoding(x_mu, self.nq)
+
+
+def mu_law_decoding(x_mu, n_quantize=256):
+    if not x_mu.dtype.is_floating_point:
+        x_mu = x_mu.to(torch.float)
+    mu = torch.tensor(n_quantize - 1, dtype=x_mu.dtype)  # confused about dtype here..
+    x = ((x_mu) / mu) * 2 - 1.
+    x = x.sign() * (torch.exp(x.abs() * torch.log1p(mu)) - 1.) / mu
+    return x
+
+
 if __name__ == "__main__":
     # a super quick test for amplitude <-> db
     x = torch.tensor([0.1, 1., 10., 100., 1000.])
-    print("Input x:", x)
+    print("Input x: ", x)
     x_db = amplitude_to_db(x)
     print("  * decibel: ", x_db)
     x_recon = db_to_amplitude(x_db)
     print("  * recon  : ", x_recon)
+
+    # test for mu-law encoding <-> decoding
+    x = torch.tensor([-1, -0.1, -0.001, 0, 0.1, 1])
+    print("Input x: ", x)
+    x_mu = mu_law_encoding(x)
+    print("  * x_mu   : ", x_mu)
+    x_recon = mu_law_decoding(x_mu)
+    print("  * x recon:", x_recon)
