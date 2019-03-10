@@ -15,7 +15,7 @@ Our motivation is:
 - Simple installation
 - Multi-channel support 
 
-## Current Issues/future work
+## Current issues/future work
 - Better module/sub-module hierarchy
 - Complex number support
 - More time-frequency representations
