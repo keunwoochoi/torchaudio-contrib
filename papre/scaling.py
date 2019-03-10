@@ -37,7 +37,7 @@ def amplitude_to_db(x, ref=1.0, amin=1e-7):
     :return: torch.tensor, same size of x, but decibel-scaled
     """
     x = torch.clamp(x, min=amin)
-    return 10.0 * (torch.log10(x) - torch.log10(torch.tensor(ref, device=x.device)))
+    return 10.0 * (torch.log10(x) - torch.log10(torch.tensor(ref, device=x.device, requires_grad=False)))
 
 
 class DbToAmplitude():
@@ -67,7 +67,7 @@ def db_to_amplitude(x, ref=1.0):
     :param ref:
     :return:
     """
-    return torch.pow(10.0, x / 10.0 + torch.log10(torch.tensor(ref, device=x.device)))
+    return torch.pow(10.0, x / 10.0 + torch.log10(torch.tensor(ref, device=x.device, requires_grad=False)))
 
 
 class MuLawEncoding(nn.Module):
@@ -89,7 +89,7 @@ class MuLawEncoding(nn.Module):
 def mu_law_encoding(x, n_quantize=256):
     if not x.dtype.is_floating_point:
         x = x.to(torch.float)
-    mu = torch.tensor(n_quantize - 1, dtype=x.dtype)  # confused about dtype here..
+    mu = torch.tensor(n_quantize - 1, dtype=x.dtype, requires_grad=False)  # confused about dtype here..
 
     x_mu = x.sign() * torch.log1p(mu * x.abs()) / torch.log1p(mu)
     x_mu = ((x_mu + 1) / 2 * mu + 0.5).long()
@@ -110,7 +110,7 @@ class MuLawDecoding(nn.Module):
 def mu_law_decoding(x_mu, n_quantize=256):
     if not x_mu.dtype.is_floating_point:
         x_mu = x_mu.to(torch.float)
-    mu = torch.tensor(n_quantize - 1, dtype=x_mu.dtype)  # confused about dtype here..
+    mu = torch.tensor(n_quantize - 1, dtype=x_mu.dtype, requires_grad=False)  # confused about dtype here..
     x = ((x_mu) / mu) * 2 - 1.
     x = x.sign() * (torch.exp(x.abs() * torch.log1p(mu)) - 1.) / mu
     return x
