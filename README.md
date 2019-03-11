@@ -17,7 +17,7 @@ Our motivation is:
 
 ## Contribution
 
-This is an early draft for a possible replacement of pytorch/audio. At this stage, we encourage interested users to discuss specific proposals in the [issue section](https://github.com/keunwoochoi/torchaudio-contrib/issues). Further discussion primarily takes place in the pytorch #audio slack channel; please request an invitation at pytorch/audio#88 if you want to join.
+This is an early draft for a possible replacement of pytorch/audio. At this stage, we encourage interested users to discuss specific proposals in the [issue section](https://github.com/keunwoochoi/torchaudio-contrib/issues).
 
 ## Current issues/future work
 - Better module/sub-module hierarchy
