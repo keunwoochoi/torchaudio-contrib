@@ -19,14 +19,14 @@ class Spectrogram(nn.Module):
 
     Args:
      * hop: int > 0
-       - Hop length between frames in sample,  should be <= n_fft.
-       - Default: None (in which case n_fft // 4 is used)
+       -  Hop length between frames in sample,  should be <= n_fft.
+       -  Default: None (in which case n_fft // 4 is used)
      * n_fft: int > 0 
-       - Size of the fft.
-       - Default: 2048
+       -  Size of the fft.
+       -  Default: 2048
      * pad: int >= 0
-       - Amount of two sided zero padding to apply.
-       - Default: 0
+       -  Amount of two sided zero padding to apply.
+       -  Default: 0
      * window: torch.Tensor,
        -  Windowing used in the stft.
        -  Default: None (in which case torch.hann_window(n_fft) is used)
@@ -34,9 +34,9 @@ class Spectrogram(nn.Module):
        -  Sampling rate of the audio signal. This may not be the same in all samples (?)
        -  Default: 44100
      * power: int = 1,2,None
-       - power to normalize the spectrogram to, make None to work with complex stft
-       - Default: 1
-     * spec_kwargs: 
+       -  Power to normalize the spectrogram to, make None to work with complex stft
+       -  Default: 1
+     * kwargs: 
        -  Any named arguments to be passed to the stft
 
     """
@@ -94,15 +94,10 @@ class Melspectrogram(Spectrogram):
     Module that outputs the mel-spectrogram (transform on the spectrogram
     to better represent human perception) of an audio signal.
 
-    It's implemented as a layer so that the computation can be faster (done dynamically
-    on GPU) and no need to store the transforms. More information:
-        - https://github.com/keunwoochoi/kapre
-        - https://arxiv.org/pdf/1706.05781.pdf
-
     Args:
      * n_mels: int > 0 
-       - Number of mel bands.
-       - Default: 128
+       -  Number of mel bands.
+       -  Default: 128
      * sr: int > 0
        -  Sampling rate of the audio signal. This may not be the same in all samples (?)
        -  Default: 44100
