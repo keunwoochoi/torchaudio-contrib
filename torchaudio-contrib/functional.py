@@ -81,11 +81,11 @@ def _mel_to_hertz(mel):
     return 700. * (10**(mel / 2595.) - 1.)
 
 
-def melspectrogram(sig, n_mels=128, sr=44100, n_fft=2048, hop=None, window=None, **kwargs):
+def melspectrogram(sig, n_mels=128, sr=44100, f_min=0.0, f_max=None, *args, **kwargs):
     """
     returns Melspectrogram
     """
-    spec_amp = spectrogram(sig, n_fft, hop, window, power=1)
+    spec_amp = spectrogram(*args, **kwargs)
     mel_fb, _ = create_mel_filter(spec_amp.size(-1), sr, n_mels, **kwargs)
     mel_spec_amp = torch.matmul(spec_amp, mel_fb)
     return mel_spec_amp
