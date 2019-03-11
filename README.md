@@ -15,6 +15,10 @@ Our motivation is:
 - Simple installation
 - Multi-channel support 
 
+## Contribution
+
+This is an early draft for a possible replacement of pytorch/audio. At this stage, we encourage interested users to discuss specific proposals in the [issue section](https://github.com/keunwoochoi/torchaudio-contrib/issues).
+
 ## Current issues/future work
 - Better module/sub-module hierarchy
 - Complex number support
