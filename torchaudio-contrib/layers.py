@@ -41,7 +41,7 @@ class Spectrogram(nn.Module):
 
     """
 
-    def __init__(self, hop=None, n_fft=2048, pad=0, window=None, sr=44100, **spec_kwargs):
+    def __init__(self, hop=None, n_fft=2048, pad=0, window=None, sr=44100, **kwargs):
 
         super(Spectrogram, self).__init__()
 
@@ -55,7 +55,7 @@ class Spectrogram(nn.Module):
 
         # Not all samples will have the same sr
         self.sr = sr
-        self.spec_kwargs = spec_kwargs
+        self.kwargs = kwargs
 
     def _build_window(self, window):
         if window is None:
@@ -84,7 +84,7 @@ class Spectrogram(nn.Module):
                     n_fft=self.n_fft,
                     hop=self.hop,
                     window=self.window,
-                    **self.spec_kwargs)
+                    **self.kwargs)
 
         return spec
 
@@ -100,43 +100,39 @@ class Melspectrogram(Spectrogram):
         - https://arxiv.org/pdf/1706.05781.pdf
 
     Args:
-     * hop: int > 0
-       - Hop length between frames in sample,  should be <= n_fft.
-       - Default: None (in which case n_fft // 4 is used)
      * n_mels: int > 0 
        - Number of mel bands.
-       - Default: 2048
-     * n_fft: int > 0 
-       - Size of the fft.
-       - Default: 2048
-     * pad: int >= 0
-       - Amount of two sided zero padding to apply.
-       - Default: 0
-     * window: torch.Tensor,
-       -  Windowing used in the stft.
-       -  Default: None (in which case torch.hann_window(n_fft) is used)
+       - Default: 128
      * sr: int > 0
        -  Sampling rate of the audio signal. This may not be the same in all samples (?)
        -  Default: 44100
-     * spec_kwargs: 
-       -  Any named arguments to be passed to the stft
-
+    * f_min: float > 0
+       -  Lowest freq. in Hz
+       -  Default: 0.
+    * f_max: float > 0
+       -  Highest freq. in Hz
+       -  Default: None (then use sr / 2.0)
+    * args: 
+       -  Positional arguments for Spectrogram
+    * kwargs: 
+       -  Keyword arguments for Spectrogram
     """
 
-    def __init__(self, hop=None, n_mels=128, n_fft=2048, pad=0, window=None, sr=44100, **spec_kwargs):
+    def __init__(self, n_mels=128, sr=44100, f_min=0.0, f_max=None, *args, **kwargs):
 
-        super(Melspectrogram, self).__init__(
-            hop, n_fft, pad, window, sr, **spec_kwargs)
-
+        super(Melspectrogram, self).__init__(*args, **kwargs)
+        self.sr = sr
         self.n_mels = n_mels
-        self.mel_fb, self.mel_freq_vals = self._build_filter()
+        self.mel_fb, self.mel_freq_vals = self._build_filter(sr, f_min, f_max)
 
-    def _build_filter(self):
+    def _build_filter(self, sr, f_min, f_max):
         # Get the mel filter matrix and the mel frequency values
         mel_fb, mel_f = create_mel_filter(
             self.n_fft//2 + 1,
-            self.sr,
-            n_mels=self.n_mels)
+            sr,
+            n_mels=self.n_mels,
+            f_min=f_min,
+            f_max=f_max)
         # Cast filter matrix as nn.Parameter so it's loaded on model's device
         return nn.Parameter(mel_fb, requires_grad=False), mel_f
 
