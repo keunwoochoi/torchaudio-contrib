@@ -1,3 +1,25 @@
-__pycache__/*
-.DS_Store
+# Intellij Idea
+.idea/
+*.iml
+
+# python
+__pycache__/
 *.pyc
+## pyenv
+.python-version
+## python virtual environments
+env/
+venv/
+.env/
+.venv
+
+# OSX
+.DS_Store
+._*
+
+# swap files for vim users
+[._]*.swp
+[._]swp
+
+# ctags
+tags
