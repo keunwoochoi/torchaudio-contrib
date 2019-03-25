@@ -1,19 +1,19 @@
-# torchaudio-contrib 
+# torchaudio-contrib
 
-Goal: To propose audio processing Pytorch codes with nice and easy-to-use APIs and functionality. 
+Goal: To propose audio processing Pytorch codes with nice and easy-to-use APIs and functionality.
 
 :open_hands: This should be seen as a community based proposal and the basis for a discussion we should have inside the pytorch audio user community. Everyone should be welcome to join and discuss.
 
 Our motivation is:
 
-  - API design: Clear, readible names for class/functions/arguments, sensible default values, and shapes. 
+  - API design: Clear, readible names for class/functions/arguments, sensible default values, and shapes.
       - Reference: [librosa](http://librosa.github.io/librosa/) (audio and MIR on Numpy), [kapre](https://github.com/keunwoochoi/kapre) (audio on Keras), [pytorch/audio](https://github.com/pytorch/audio) (audio on Pytorch)
   - Fast processing on GPU
   - Methodology: Both layer and functional
     - Layers (`nn.Module`) for reusability and easier use
-    - and identical implementation with `Functionals` 
+    - and identical implementation with `Functionals`
 - Simple installation
-- Multi-channel support 
+- Multi-channel support
 
 ## Contribution
 
@@ -114,6 +114,16 @@ def info(...)
 * `scipy.io` or `soundfile` as default for __wav__ files
 * `aubio` or `audioread` for __mp3__ and __mp4__
 
+
+### Installation
+
+`pip install .`
+
+
+### Importing
+
+import torchaudio_contrib
+
+
 ## Authors
 Keunwoo Choi, Faro Stöter, Kiran Sanjeevan
-
