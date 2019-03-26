@@ -117,7 +117,7 @@ def info(...)
 
 ### Installation
 
-`pip install .`
+`pip install -e .`
 
 
 ### Importing
