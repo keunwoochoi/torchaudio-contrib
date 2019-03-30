@@ -1,70 +1,94 @@
 import torch
-import numpy as np
+import math
+import torch.nn.functional as F
 
 
-def _get_time_values(sig_length, sr, hop):
-    """
-    Get the time axis values given the signal length, sample
-    rate and hop size.
-    """
-    return torch.linspace(0, sig_length/sr, sig_length//hop+1)
+def stft_defaults(n_fft, hop_length, len_win, window):
+    '''
+    Handle stft defaults (if torchaudio_contrib wants to handle 
+    them differently than torch.stft). Should function outisde 
+    torchaudio_contrib.stft since torchaudio_contrib.STFT will 
+    use it outisde of forward() (?).
+    '''
+    hop_length = n_fft // 4 if hop_length is None else hop_length
 
-
-def _get_freq_values(n_fft, sr):
-    """
-    Get the frequency axis values given the number of FFT bins
-    and sample rate.
-    """
-    return torch.linspace(0, sr/2, n_fft//2 + 1)
-
-
-def get_spectrogram_axis(sig_length, sr, n_fft=2048, hop=512):
-    t = _get_time_values(sig_length, sr, hop)
-    f = _get_freq_values(n_fft, sr)
-    return t, f
-
-
-def STFT(sig, n_fft=2048, hop=None, window=None, **kwargs):
-    """A wrapper for torch.stft with some preset parameters.
-    Returned value keeps both real and imageinary parts.
-    For STFT magnitude, see spectrogram
-
-    input -> (batch, channel, time) or (channel, time)
-    output -> (batch, channel, freq, hop, complex) or (channel, freq, hop, complex)
-
-    """
-    if hop is None:
-        hop = n_fft // 4
     if window is None:
-        window = torch.hann_window(n_fft)
+        length = n_fft if len_win is None else len_win
+        window = torch.hann_window(length)
+        if not isinstance(window, torch.Tensor):
+            raise TypeError('window must be a of type torch.Tensor')
 
-    if sig.dim() == 3:
-        batch, channel, time = sig.size()
+    return n_fft, hop_length, window
+
+
+def _stft(x, n_fft, hop_length, window, pad, pad_mode, **kwargs):
+    """
+    Wrap torch.stft allowing for multi-channel stft. 
+
+    Args:
+        x (Tensor): Tensor of audio of size (channel, signal) or (batch, channel, signal).
+        n_fft (int): FFT window size.
+        hop_length (int): Number audio of frames between STFT columns.
+        len_win (int): Size of stft window.
+        window (Tensor): 1-D tensor.
+        pad (int): Amount of padding to apply to signal.
+        pad_mode: padding method (see torch.nn.functional.pad).
+        **kwargs: Other torch.stft parameters, see torch.stft for more details.
+
+    Returns:
+        Tensor: (batch, channel, freq, hop, complex) or (channel, freq, hop, complex)
+
+    """
+    if x.dim() == 3:
+        batch, channel, time = x.size()
         out_shape = [batch, channel, n_fft//2+1, -1, 2]
-    elif sig.dim() == 2:
-        channel, time = sig.size()
+    elif x.dim() == 2:
+        channel, time = x.size()
         out_shape = [channel, n_fft//2+1, -1, 2]
     else:
         raise ValueError('Input tensor dim() must be either 2 or 3.')
 
-    sig = sig.reshape(-1, time)
-    stft = torch.stft(sig, n_fft, hop, window=window, **kwargs)
-    stft = stft.reshape(out_shape)
+    x = x.reshape(-1, time)
 
-    return stft
+    if pad > 0:
+        x = F.pad(x, (pad, pad), pad_mode)
+
+    win_length = window.size(0)
+    stft_out = torch.stft(x, n_fft, hop_length, window=window,
+                          win_length=win_length, **kwargs)
+    stft_out = stft_out.reshape(out_shape)
+
+    return stft_out
 
 
-def spectrogram(sig, n_fft=2048, hop=None, window=None, power=1.0, **kwargs):
+def stft(x, n_fft=2048, hop_length=None, len_win=None,
+         window=None, pad=0, pad_mode="reflect", **kwargs):
     """
-    returns magnitude of spectrogram
-
-    input -> (batch, channel, time) or (channel, time)
-    output -> (batch, channel, freq, hop) or (channel, freq, hop)
+    Wraps _stft setting default values and correct window device. 
+    See torchaudio_contrib.STFT for more details.
     """
-    stft = STFT(sig, n_fft, hop=hop, window=window, **kwargs)
-    if power is None:
-        return stft
-    return stft.pow(2).sum(-1).pow(power / 2.0)
+    n_fft, hop_length, window = stft_defaults(
+        n_fft, hop_length, len_win, window)
+    window = window.to(x.device)
+    return _stft(x, n_fft=n_fft, hop_length=hop_length,
+                 window=window, pad=pad, pad_mode=pad_mode, **kwargs)
+
+
+def spectrogram(x, n_fft=2048, hop_length=None, len_win=None,
+                window=None, pad=0, pad_mode="reflect", power=1., **kwargs):
+    """
+    Compute the spectrogram of a given signal. 
+    See torchaudio_contrib.Spectrogram for more details. 
+    """
+    return complex_norm(stft(x, n_fft, hop_length, len_win,
+                             window, pad, pad_mode, **kwargs), power=power)
+
+
+def complex_norm(x, power=1.0):
+    """
+    Normalize complex tensor.
+    """
+    return x.pow(2).sum(-1).pow(power / 2.0)
 
 
 def _hertz_to_mel(f):
@@ -81,26 +105,26 @@ def _mel_to_hertz(mel):
     return 700. * (10**(mel / 2595.) - 1.)
 
 
-def melspectrogram(sig, n_mels=128, sr=44100, f_min=0.0, f_max=None, *args, **kwargs):
-    """
-    returns Melspectrogram
-    """
-    spec_amp = spectrogram(*args, **kwargs)
-    mel_fb, _ = create_mel_filter(spec_amp.size(-1), sr, n_mels, **kwargs)
-    mel_spec_amp = torch.matmul(spec_amp, mel_fb)
-    return mel_spec_amp
-
-
-def create_mel_filter(n_stft, sr, n_mels=128, f_min=0.0, f_max=None):
+def create_mel_filter(n_mels, sr, f_min, f_max, n_stft):
     '''
     Creates filter matrix to transform fft frequency bins into mel frequency bins.
     Equivalent to librosa.filters.mel(sr, n_fft, htk=True, norm=None).
 
-    Output Tensor shape -> (n_mels, n_stft)
+    Args:
+        n_mels (int): number of mel bins.
+        sr (int): sample rate of audio signal.
+        f_max (float, optional): maximum frequency.
+        f_min (float): minimum frequency.
+        n_stft (int, optional): number of filter banks from stft.
+
+    Returns:
+        fb (Tensor): (n_stft, n_mels)
     '''
     # Convert to find mel lower/upper bounds
     f_max = f_max if f_max else sr // 2
-    m_min = 0. if f_min == 0 else _hertz_to_mel(f_min)
+    n_stft = n_stft if n_stft else 1025
+
+    m_min = _hertz_to_mel(f_min)
     m_max = _hertz_to_mel(f_max)
 
     # Compute stft frequency values
@@ -118,61 +142,31 @@ def create_mel_filter(n_stft, sr, n_mels=128, f_min=0.0, f_max=None):
     up_slopes = slopes[:, 2:] / f_diff[1:]  # (n_stft, n_mels)
     fb = torch.clamp(torch.min(down_slopes, up_slopes), min=0.)
 
-    return fb, f_pts[:-2]
+    return fb
 
 
-def amplitude_to_db(spec, ref=1.0, amin=1e-10, top_db=80.0):
+def melspectrogram(x, n_mels=128, sr=44100, f_min=0.0, f_max=None, n_stft=None, **kwargs):
     """
-    Amplitude spectrogram to the db scale
-
-    Input Tensor shape -> (freq, time)
-    Output Tensor shape -> (freq, time)
+    Compute the melspectrogram of a given signal. 
+    See torchaudio_contrib.Melspectrogram for more details.
     """
-    power = spec**2
-    return power_to_db(power, ref, amin, top_db)
+    spec = spectrogram(x, **kwargs)
+    fb = create_mel_filter(
+        n_mels=n_mels,
+        sr=sr,
+        f_min=f_min,
+        f_max=f_max,
+        n_stft=spec.size(-2))
+    fb = fb.to(x.device)
 
-
-def power_to_db(spec, ref=1.0, amin=1e-10, top_db=80.0):
-    """
-    Power spectrogram to the db scale
-
-    Input Tensor shape -> (freq, time)
-    Output Tensor shape -> (freq, time)
-    """
-    if amin <= 0:
-        raise ParameterError('amin must be strictly positive')
-
-    if callable(ref):
-        ref_value = ref(spec_norm)
-    else:
-        ref_value = torch.tensor(ref)
-
-    log_spec = 10*torch.log10(torch.clamp(spec, min=amin))
-    log_spec -= 10*torch.log10(torch.clamp(ref_value, min=amin))
-
-    if top_db is not None:
-        if top_db < 0:
-            raise ParameterError('top_db must be non-negative')
-        log_spec = torch.clamp(log_spec, min=(log_spec.max() - top_db))
-
-    return log_spec
-
-
-def db_to_power(spec_db, ref=1.0):
-    """
-    db-scale spectrogram to power spectrogram
-
-    Input Tensor shape -> (freq, time)
-    Output Tensor shape -> (freq, time)
-    """
-    return ref * torch.pow(10., spec_db * 0.1)
+    return torch.matmul(spec.transpose(2, 3), fb).transpose(2, 3)
 
 
 def angle(tensor):
     """ 
     Return angle of a complex tensor with shape (*, 2).
     """
-    return torch.atan2(tensor[...,1], tensor[...,0])
+    return torch.atan2(tensor[..., 1], tensor[..., 0])
 
 
 def magphase(spec, power=1.):
@@ -184,22 +178,21 @@ def magphase(spec, power=1.):
     phase = angle(spec)
     return mag, phase
 
-def phase_vocoder(spec, rate, hop, n_fft):
+
+def phase_vocoder(spec, rate, phi_advance):
     """
     Phase vocoder. Given a STFT tensor, speed up in time 
     without modifying pitch by a factor of `rate`.
+
 
     Input Tensor shape -> (batch, channel, freq, time, 2)
     Output Tensor shape -> (batch, channel, freq, time//rate+1, 2)
     """
 
-    fft_size = n_fft//2 + 1
     time_steps = torch.arange(0, spec.size(
         3), rate, device=spec.device)  # (new_time)
-    phi_advance = torch.linspace(
-        0, np.pi * hop, fft_size, device=spec.device)[..., None]
 
-    alphas = (time_steps % 1)  # .unsqueeze(1) # (new_time)
+    alphas = (time_steps % 1)  # (new_time)
 
     phase_0 = angle(spec[:, :, :, :1])
 
@@ -210,15 +203,15 @@ def phase_vocoder(spec, rate, hop, n_fft):
     spec_0 = spec[:, :, :, time_steps.long()]  # (new_time, freq, 2)
     spec_1 = spec[:, :, :, (time_steps + 1).long()]  # (new_time, freq, 2)
 
-    spec_0_angle = angle(spec_0) # (new_time, freq)
-    spec_1_angle = angle(spec_1) # (new_time, freq)
+    spec_0_angle = angle(spec_0)  # (new_time, freq)
+    spec_1_angle = angle(spec_1)  # (new_time, freq)
 
     spec_0_norm = torch.norm(spec_0, dim=-1)  # (new_time, freq)
     spec_1_norm = torch.norm(spec_1, dim=-1)  # (new_time, freq)
 
     spec_phase = spec_1_angle - spec_0_angle - phi_advance  # (new_time, freq)
-    spec_phase = spec_phase - 2 * np.pi * \
-        torch.round(spec_phase / (2 * np.pi))  # (new_time, freq)
+    spec_phase = spec_phase - 2 * math.pi * \
+        torch.round(spec_phase / (2 * math.pi))  # (new_time, freq)
 
     # Compute Phase Accum
     phase = spec_phase + phi_advance  # (new_time, freq)
