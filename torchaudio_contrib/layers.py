@@ -7,12 +7,16 @@ from .functional import stft_defaults, _stft, complex_norm, create_mel_filter, p
 
 class _ModuleNoStateBuffers(nn.Module):
     """
-    Extension of nn.Module
+    Extension of nn.Module that removes buffers
+    from state_dict.
+
+    Args:
+        buffers (dict): mapping of names and tensors to be registered.
     """
 
-    def __init__(self, buffs):
+    def __init__(self, buffers):
         super(_ModuleNoStateBuffers, self).__init__()
-        for k, v in buffs.items():
+        for k, v in buffers.items():
             self.register_buffer(k, v)
 
     def state_dict(self, destination=None, prefix='', keep_vars=False):
@@ -76,7 +80,7 @@ class STFT(_ModuleNoStateBuffers):
 
 class ComplexNorm(nn.Module):
     """
-    Wrap complex_norm in a nn.Module.
+    Wrap complex_norm in an nn.Module.
     """
 
     def __init__(self, power=1.0):
@@ -102,7 +106,7 @@ class Filterbank(_ModuleNoStateBuffers):
         Returns:
             fb_out (Tensor): freq -> fb.size(0)
         """
-        return torch.matmul(x.transpose(2, 3), self.fb).transpose(2, 3)
+        return torch.matmul(x.transpose(-2, -1), self.fb).transpose(-2, -1)
 
 
 class MelFilterbank(Filterbank):

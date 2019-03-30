@@ -39,6 +39,12 @@ def _stft(x, n_fft, hop_length, window, pad, pad_mode, **kwargs):
         Tensor: (batch, channel, freq, hop, complex) or (channel, freq, hop, complex)
 
     """
+
+    # (!) Only 3D, 4D, 5D padding with non-constant
+    # padding are supported for now.
+    if pad > 0:
+        x = F.pad(x, (pad, pad), pad_mode)
+
     if x.dim() == 3:
         batch, channel, time = x.size()
         out_shape = [batch, channel, n_fft//2+1, -1, 2]
@@ -49,9 +55,6 @@ def _stft(x, n_fft, hop_length, window, pad, pad_mode, **kwargs):
         raise ValueError('Input tensor dim() must be either 2 or 3.')
 
     x = x.reshape(-1, time)
-
-    if pad > 0:
-        x = F.pad(x, (pad, pad), pad_mode)
 
     win_length = window.size(0)
     stft_out = torch.stft(x, n_fft, hop_length, window=window,
@@ -74,6 +77,13 @@ def stft(x, n_fft=2048, hop_length=None, len_win=None,
                  window=window, pad=pad, pad_mode=pad_mode, **kwargs)
 
 
+def complex_norm(x, power=1.0):
+    """
+    Normalize complex tensor.
+    """
+    return x.pow(2).sum(-1).pow(power / 2.0)
+
+
 def spectrogram(x, n_fft=2048, hop_length=None, len_win=None,
                 window=None, pad=0, pad_mode="reflect", power=1., **kwargs):
     """
@@ -82,13 +92,6 @@ def spectrogram(x, n_fft=2048, hop_length=None, len_win=None,
     """
     return complex_norm(stft(x, n_fft, hop_length, len_win,
                              window, pad, pad_mode, **kwargs), power=power)
-
-
-def complex_norm(x, power=1.0):
-    """
-    Normalize complex tensor.
-    """
-    return x.pow(2).sum(-1).pow(power / 2.0)
 
 
 def _hertz_to_mel(f):
@@ -159,7 +162,7 @@ def melspectrogram(x, n_mels=128, sr=44100, f_min=0.0, f_max=None, n_stft=None, 
         n_stft=spec.size(-2))
     fb = fb.to(x.device)
 
-    return torch.matmul(spec.transpose(2, 3), fb).transpose(2, 3)
+    return torch.matmul(spec.transpose(-2, -1), fb).transpose(-2, -1)
 
 
 def angle(tensor):
