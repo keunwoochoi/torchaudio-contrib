@@ -4,10 +4,10 @@ import torch.nn.functional as F
 
 
 def stft_defaults(n_fft, hop_length, len_win, window):
-    '''
-    Should function outisde torchaudio_contrib.stft since 
+    """
+    Should function outisde torchaudio_contrib.stft since
     torchaudio_contrib.STFT will use it outisde of forward() (?).
-    '''
+    """
     hop_length = n_fft // 4 if hop_length is None else hop_length
 
     if window is None:
@@ -21,10 +21,11 @@ def stft_defaults(n_fft, hop_length, len_win, window):
 
 def _stft(x, n_fft, hop_length, window, pad, pad_mode, **kwargs):
     """
-    Wrap torch.stft allowing for multi-channel stft. 
+    Wrap torch.stft allowing for multi-channel stft.
 
     Args:
-        x (Tensor): Tensor of audio of size (channel, signal) or (batch, channel, signal).
+        x (Tensor): Tensor of audio of size (channel, signal)
+            or (batch, channel, signal).
         n_fft (int): FFT window size.
         hop_length (int): Number audio of frames between STFT columns.
         len_win (int): Size of stft window.
@@ -34,7 +35,8 @@ def _stft(x, n_fft, hop_length, window, pad, pad_mode, **kwargs):
         **kwargs: Other torch.stft parameters, see torch.stft for more details.
 
     Returns:
-        Tensor: (batch, channel, freq, hop, complex) or (channel, freq, hop, complex)
+        Tensor: (batch, channel, freq, hop, complex)
+            or (channel, freq, hop, complex)
 
     """
 
@@ -45,10 +47,10 @@ def _stft(x, n_fft, hop_length, window, pad, pad_mode, **kwargs):
 
     if x.dim() == 3:
         batch, channel, time = x.size()
-        out_shape = [batch, channel, n_fft//2+1, -1, 2]
+        out_shape = [batch, channel, n_fft // 2 + 1, -1, 2]
     elif x.dim() == 2:
         channel, time = x.size()
-        out_shape = [channel, n_fft//2+1, -1, 2]
+        out_shape = [channel, n_fft // 2 + 1, -1, 2]
     else:
         raise ValueError('Input tensor dim() must be either 2 or 3.')
 
@@ -64,13 +66,14 @@ def _stft(x, n_fft, hop_length, window, pad, pad_mode, **kwargs):
 def stft(x, n_fft=2048, hop_length=None, len_win=None,
          window=None, pad=0, pad_mode="reflect", **kwargs):
     """
-    Wraps _stft setting default values and correct window device. 
+    Wraps _stft setting default values and correct window device.
     See torchaudio_contrib.STFT for more details.
     """
     n_fft, hop_length, window = stft_defaults(
         n_fft, hop_length, len_win, window)
     return _stft(x, n_fft=n_fft, hop_length=hop_length,
-                 window=window.to(x.device), pad=pad, pad_mode=pad_mode, **kwargs)
+                 window=window.to(x.device), pad=pad,
+                 pad_mode=pad_mode, **kwargs)
 
 
 def complex_norm(x, power=1.0):
@@ -83,30 +86,31 @@ def complex_norm(x, power=1.0):
 def spectrogram(x, n_fft=2048, hop_length=None, len_win=None,
                 window=None, pad=0, pad_mode="reflect", power=1., **kwargs):
     """
-    Compute the spectrogram of a given signal. 
-    See torchaudio_contrib.Spectrogram for more details. 
+    Compute the spectrogram of a given signal.
+    See torchaudio_contrib.Spectrogram for more details.
     """
     return complex_norm(stft(x, n_fft, hop_length, len_win,
                              window, pad, pad_mode, **kwargs), power=power)
 
 
 def _hertz_to_mel(f):
-    '''
+    """
     Converting frequency into mel values using HTK formula
-    '''
+    """
     return 2595. * torch.log10(torch.tensor(1.) + (f / 700.))
 
 
 def _mel_to_hertz(mel):
-    '''
+    """
     Converting mel values into frequency using HTK formula
-    '''
+    """
     return 700. * (10**(mel / 2595.) - 1.)
 
 
 def create_mel_filter(n_mels, sr, f_min, f_max, n_stft):
-    '''
-    Creates filter matrix to transform fft frequency bins into mel frequency bins.
+    """
+    Creates filter matrix to transform fft frequency bins
+    into mel frequency bins.
     Equivalent to librosa.filters.mel(sr, n_fft, htk=True, norm=None).
 
     Args:
@@ -118,7 +122,7 @@ def create_mel_filter(n_mels, sr, f_min, f_max, n_stft):
 
     Returns:
         fb (Tensor): (n_stft, n_mels)
-    '''
+    """
     # Convert to find mel lower/upper bounds
     f_max = f_max if f_max else sr // 2
     n_stft = n_stft if n_stft else 1025
@@ -146,7 +150,7 @@ def create_mel_filter(n_mels, sr, f_min, f_max, n_stft):
 
 def melspectrogram(x, n_mels=128, sr=44100, f_min=0.0, f_max=None, **kwargs):
     """
-    Compute the melspectrogram of a given signal. 
+    Compute the melspectrogram of a given signal.
     See torchaudio_contrib.Melspectrogram for more details.
     """
     spec = spectrogram(x, **kwargs)
@@ -162,7 +166,7 @@ def melspectrogram(x, n_mels=128, sr=44100, f_min=0.0, f_max=None, **kwargs):
 
 
 def angle(tensor):
-    """ 
+    """
     Return angle of a complex tensor with shape (*, 2).
     """
     return torch.atan2(tensor[..., 1], tensor[..., 0])
@@ -173,14 +177,14 @@ def magphase(spec, power=1.):
     Separate a complex-valued spectrogram with shape (*,2)
     into its magnitude and phase.
     """
-    mag = spec.pow(2).sum(-1).pow(power/2)
+    mag = spec.pow(2).sum(-1).pow(power / 2)
     phase = angle(spec)
     return mag, phase
 
 
 def phase_vocoder(spec, rate, phi_advance):
     """
-    Phase vocoder. Given a STFT tensor, speed up in time 
+    Phase vocoder. Given a STFT tensor, speed up in time
     without modifying pitch by a factor of `rate`.
 
 
@@ -196,7 +200,7 @@ def phase_vocoder(spec, rate, phi_advance):
     phase_0 = angle(spec[:, :, :, :1])
 
     # Time Padding
-    pad_shape = [0, 0]+[0, 2]+[0]*6
+    pad_shape = [0, 0] + [0, 2] + [0] * 6
     spec = torch.nn.functional.pad(spec, pad_shape)
 
     spec_0 = spec[:, :, :, time_steps.long()]  # (new_time, freq, 2)
@@ -219,7 +223,7 @@ def phase_vocoder(spec, rate, phi_advance):
 
     phase_acc = torch.cumsum(phase, -1)  # (new_time, freq)
 
-    mag = alphas * spec_1_norm + (1-alphas) * spec_0_norm  # (new_time, freq)
+    mag = alphas * spec_1_norm + (1 - alphas) * spec_0_norm  # (new_time, freq)
 
     spec_stretch_real = mag * torch.cos(phase_acc)  # (new_time, freq)
     spec_stretch_imag = mag * torch.sin(phase_acc)  # (new_time, freq)
