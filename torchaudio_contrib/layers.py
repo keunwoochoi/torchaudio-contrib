@@ -80,7 +80,7 @@ class STFT(_ModuleNoStateBuffers):
 
 class ComplexNorm(nn.Module):
     """
-    Wrap complex_norm in an nn.Module.
+    Wrap torchaudio_contrib.complex_norm in an nn.Module.
     """
 
     def __init__(self, power=1.0):
@@ -187,7 +187,7 @@ def Spectrogram(n_fft=2048, hop_length=None, len_win=None,
         window (Tensor): 1-D tensor. Defaults to Hanning Window of size len_win.
         pad (int): Amount of padding to apply to signal. Defaults to 0.
         pad_mode: padding method (see torch.nn.functional.pad). Defaults to "reflect".
-        power (float): What power to normalize to.
+        power (float): What power to normalize to. Defaults to 1.
         **kwargs: Other torch.stft parameters, see torch.stft for more details.
     """
     return nn.Sequential(STFT(n_fft, hop_length, len_win,
@@ -199,15 +199,14 @@ def Melspectrogram(n_mels=128, sr=44100, f_min=0.0, f_max=None, n_stft=None, **k
     Get melspectrogram module.
 
     Args:
-        n_mels (int): number of mel bins.
-        sr (int): sample rate of audio signal.
+        n_mels (int): number of mel bins. Defaults to 128.
+        sr (int): sample rate of audio signal. Defaults to 44100.
         f_max (float, optional): maximum frequency. Defaults to sr // 2.
         f_min (float): minimum frequency. Defaults to 0.
         n_stft (int, optional): number of filter banks from stft. Defaults to n_fft//2 + 1 if 'n_fft' in kwargs else 1025.
         **kwargs: torchaudio_contrib.Spectrogram parameters.
     """
     n_fft = kwargs.get('n_fft', None)
-    if n_fft:
-        n_stft = n_fft//2 + 1
+    n_stft = n_fft//2 + 1 if n_fft else n_stft
     return nn.Sequential(*Spectrogram(**kwargs),
                          MelFilterbank(n_mels, sr, f_min, f_max, n_stft))

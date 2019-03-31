@@ -5,10 +5,8 @@ import torch.nn.functional as F
 
 def stft_defaults(n_fft, hop_length, len_win, window):
     '''
-    Handle stft defaults (if torchaudio_contrib wants to handle 
-    them differently than torch.stft). Should function outisde 
-    torchaudio_contrib.stft since torchaudio_contrib.STFT will 
-    use it outisde of forward() (?).
+    Should function outisde torchaudio_contrib.stft since 
+    torchaudio_contrib.STFT will use it outisde of forward() (?).
     '''
     hop_length = n_fft // 4 if hop_length is None else hop_length
 
@@ -56,9 +54,8 @@ def _stft(x, n_fft, hop_length, window, pad, pad_mode, **kwargs):
 
     x = x.reshape(-1, time)
 
-    win_length = window.size(0)
     stft_out = torch.stft(x, n_fft, hop_length, window=window,
-                          win_length=win_length, **kwargs)
+                          win_length=window.size(0), **kwargs)
     stft_out = stft_out.reshape(out_shape)
 
     return stft_out
@@ -72,9 +69,8 @@ def stft(x, n_fft=2048, hop_length=None, len_win=None,
     """
     n_fft, hop_length, window = stft_defaults(
         n_fft, hop_length, len_win, window)
-    window = window.to(x.device)
     return _stft(x, n_fft=n_fft, hop_length=hop_length,
-                 window=window, pad=pad, pad_mode=pad_mode, **kwargs)
+                 window=window.to(x.device), pad=pad, pad_mode=pad_mode, **kwargs)
 
 
 def complex_norm(x, power=1.0):
@@ -148,7 +144,7 @@ def create_mel_filter(n_mels, sr, f_min, f_max, n_stft):
     return fb
 
 
-def melspectrogram(x, n_mels=128, sr=44100, f_min=0.0, f_max=None, n_stft=None, **kwargs):
+def melspectrogram(x, n_mels=128, sr=44100, f_min=0.0, f_max=None, **kwargs):
     """
     Compute the melspectrogram of a given signal. 
     See torchaudio_contrib.Melspectrogram for more details.
