@@ -2,30 +2,37 @@ import torch
 import math
 import torch.nn as nn
 
-from .functional import stft_defaults, _stft, complex_norm, \
-    create_mel_filter, phase_vocoder
+from .functional import stft, complex_norm, \
+    create_mel_filter, phase_vocoder, apply_filterbank
 
 
 class _ModuleNoStateBuffers(nn.Module):
     """
     Extension of nn.Module that removes buffers
     from state_dict.
-
-    Args:
-        buffers (dict): mapping of names and tensors to be registered.
     """
-
-    def __init__(self, buffers):
-        super(_ModuleNoStateBuffers, self).__init__()
-        for k, v in buffers.items():
-            self.register_buffer(k, v)
 
     def state_dict(self, destination=None, prefix='', keep_vars=False):
         ret = super(_ModuleNoStateBuffers, self).state_dict(
             destination, prefix, keep_vars)
-        for k in self._buffers.keys():
+        for k in self._buffers:
             del ret[prefix + k]
         return ret
+
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        # temporarily hide the buffers; we do not want to restore them
+
+        buffers = self._buffers
+        self._buffers = {}
+        result = super(
+            _ModuleNoStateBuffers,
+            self)._load_from_state_dict(
+            state_dict,
+            prefix,
+            *args,
+            **kwargs)
+        self._buffers = buffers
+        return result
 
 
 class STFT(_ModuleNoStateBuffers):
@@ -35,12 +42,12 @@ class STFT(_ModuleNoStateBuffers):
 
     Args:
 
-        n_fft (int): FFT window size. Defaults to 2048.
-        hop_length (int): Number audio of frames between stft columns.
-            Defaults to n_fft // 4.
-        len_win (int): Size of stft window. Defaults to n_fft.
-        window (Tensor): 1-D tensor. Defaults to Hanning Window
-            of size len_win.
+        fft_len (int): FFT window size. Defaults to 2048.
+        hop_len (int): Number audio of frames between stft columns.
+            Defaults to fft_len // 4.
+        frame_len (int): Size of stft window. Defaults to fft_len.
+        window (Tensor): 1-D tensor. Defaults to Hann Window
+            of size frame_len.
         pad (int): Amount of padding to apply to signal. Defaults to 0.
         pad_mode: padding method (see torch.nn.functional.pad).
             Defaults to "reflect".
@@ -48,44 +55,59 @@ class STFT(_ModuleNoStateBuffers):
 
     """
 
-    def __init__(self, n_fft=2048, hop_length=None, len_win=None,
+    def __init__(self, fft_len=2048, hop_len=None, frame_len=None,
                  window=None, pad=0, pad_mode="reflect", **kwargs):
 
+        super(STFT, self).__init__()
+
         # Get default values, window so it can be registered as buffer
-        self.n_fft, self.hop_length, window = stft_defaults(
-            n_fft, hop_length, len_win, window)
+        self.fft_len, self.hop_len, window = self._stft_defaults(
+            fft_len, hop_len, frame_len, window)
 
         self.pad = pad
         self.pad_mode = pad_mode
         self.kwargs = kwargs
 
-        super(STFT, self).__init__({'window': window})
+        self.register_buffer('window', window)
 
-    def forward(self, x):
+    def _stft_defaults(self, fft_len, hop_len, frame_len, window):
+        """
+        Handle default values for STFT.
+        """
+        hop_len = fft_len // 4 if hop_len is None else hop_len
+
+        if window is None:
+            length = fft_len if frame_len is None else frame_len
+            window = torch.hann_window(length)
+        if not isinstance(window, torch.Tensor):
+            raise TypeError('window must be a of type torch.Tensor')
+
+        return fft_len, hop_len, window
+
+    def forward(self, signal):
         """
         Args:
-            x (Tensor): (channel, signal) or (batch, channel, signal).
+            signal (Tensor): (channel, time) or (batch, channel, time).
 
         Returns:
-            stft_out (Tensor): (channel, time, freq, complex)
+            spect (Tensor): (channel, time, freq, complex)
                 or (batch, channel, time, freq, complex).
         """
 
-        # use registered window so have to use _stft
-        stft_out = _stft(
-            x,
-            self.n_fft,
-            self.hop_length,
+        spect = stft(
+            signal,
+            self.fft_len,
+            self.hop_len,
             window=self.window,
             pad=self.pad,
             pad_mode=self.pad_mode,
             **self.kwargs)
 
-        return stft_out
+        return spect
 
     def __repr__(self):
-        param_str = '(n_fft={}, hop_length={}, len_win={}, pad={})'.format(
-            self.n_fft, self.hop_length, self.window.size(0), self.pad)
+        param_str = '(fft_len={}, hop_len={}, frame_len={}, pad={})'.format(
+            self.fft_len, self.hop_len, self.window.size(0), self.pad)
         return self.__class__.__name__ + param_str
 
 
@@ -98,65 +120,91 @@ class ComplexNorm(nn.Module):
         super(ComplexNorm, self).__init__()
         self.power = power
 
-    def forward(self, x):
-        return complex_norm(x, self.power)
+    def forward(self, spect):
+        return complex_norm(spect, self.power)
 
 
-class Filterbank(_ModuleNoStateBuffers):
+class ApplyFilterbank(_ModuleNoStateBuffers):
+    """
+    Applies a filterbank transform.
+    """
 
-    def __init__(self):
-        super(Filterbank, self).__init__({'fb': self._build_fb()})
+    def __init__(self, filterbank):
+        super(ApplyFilterbank, self).__init__()
+        self.register_buffer('filterbank', filterbank)
 
-    def _build_fb(self):
-        raise NotImplementedError
-
-    def forward(self, x):
+    def forward(self, spect):
         """
         Args:
-            x (Tensor): (channel, time, freq) or (batch, channel, time, freq).
+            spect (Tensor): (channel, time, freq) or (batch, channel, time, freq).
 
         Returns:
-            ret (Tensor): freq -> fb.size(0)
+            (Tensor): freq -> filterbank.size(0)
         """
-        return torch.matmul(x.transpose(-2, -1), self.fb).transpose(-2, -1)
+        return apply_filterbank(spect, self.filterbank)
+
+
+class Filterbank(object):
+    """
+    Base class for providing a filterbank matrix.
+    """
+
+    def __init__(self):
+        super(Filterbank, self).__init__()
+
+    def get_filterbank(self):
+        raise NotImplementedError
 
 
 class MelFilterbank(Filterbank):
     """
-    Convert a spectrogram into a mel frequency spectrogram using
-    a filterbank.
+    Provides a filterbank matrix to convert a spectrogram into a mel frequency spectrogram.
 
     Args:
-        n_mels (int): number of mel bins. Defaults to 128.
-        sr (int): sample rate of audio signal. Defaults to 44100.
-        f_max (float, optional): maximum frequency. Defaults to sr // 2.
-        f_min (float): minimum frequency. Defaults to 0.
-        n_stft (int, optional): number of filter banks from stft.
+        num_bands (int): number of mel bins. Defaults to 128.
+        sample_rate (int): sample rate of audio signal. Defaults to 44100.
+        min_freq (float): minimum frequency. Defaults to 0.
+        max_freq (float, optional): maximum frequency. Defaults to sample_rate // 2.
+        num_bins (int, optional): number of filter banks from stft.
             Defaults to 2048//2 + 1.
     """
 
-    def __init__(self, n_mels=128, sr=44100,
-                 f_min=0.0, f_max=None, n_stft=None):
-
-        self.n_stft = n_stft
-        self.n_mels = n_mels
-        self.sr = sr
-        self.f_max = f_max
-        self.f_min = f_min
+    def __init__(self, num_bands=128, sample_rate=16000,
+                 min_freq=0.0, max_freq=None, num_bins=1025):
 
         super(MelFilterbank, self).__init__()
 
-    def _build_fb(self):
+        self.num_bands = num_bands
+        self.sample_rate = sample_rate
+        self.min_freq = min_freq
+        self.max_freq = max_freq if max_freq else sample_rate // 2
+        self.num_bins = num_bins
+
+    def to_hertz(self, mel):
+        """
+        Converting mel values into frequency using HTK formula
+        """
+        return 700. * (10**(mel / 2595.) - 1.)
+
+    def from_hertz(self, hz):
+        """
+        Converting frequency into mel values using HTK formula
+        """
+        return 2595. * torch.log10(torch.tensor(1.) + (hz / 700.))
+
+    def get_filterbank(self):
         return create_mel_filter(
-            n_mels=self.n_mels,
-            sr=self.sr,
-            f_min=self.f_min,
-            f_max=self.f_max,
-            n_stft=self.n_stft)
+            num_bands=self.num_bands,
+            sample_rate=self.sample_rate,
+            min_freq=self.min_freq,
+            max_freq=self.max_freq,
+            num_bins=self.num_bins,
+            to_hertz=self.to_hertz,
+            from_hertz=self.from_hertz)
 
     def __repr__(self):
-        param_str = '(n_mels={}, sr={}, f_min={}, f_max={})'.format(
-            self.n_mels, self.sr, self.f_min, self.f_max)
+        param_str = '(num_bands={}, sample_rate={}, min_freq={}, max_freq={})'.format(
+            self.num_bands, self.sample_rate, self.min_freq, self.max_freq)
         return self.__class__.__name__ + param_str
 
 
@@ -167,42 +215,43 @@ class StretchSpecTime(_ModuleNoStateBuffers):
     Args:
 
         rate (float): rate to speed up or slow down by.
-        hop_length (int): Number audio of frames between STFT columns.
+        hop_len (int): Number audio of frames between STFT columns.
             Defaults to 512.
-        n_stft (int, optional): number of filter banks from stft.
+        num_bins (int, optional): number of filter banks from stft.
             Defaults to 1025.
     """
 
-    def __init__(self, rate, hop_length=512, n_stft=1025):
+    def __init__(self, rate, hop_len=512, num_bins=1025):
+
+        super(StretchSpecTime, self).__init__()
 
         self.rate = rate
-
         phi_advance = torch.linspace(
-            0, math.pi * hop_length, n_stft)[..., None]
+            0, math.pi * hop_len, num_bins)[..., None]
 
-        super(StretchSpecTime, self).__init__({'phi_advance': phi_advance})
+        self.register_buffer('phi_advance', phi_advance)
 
-    def forward(self, x):
-        return phase_vocoder(x, self.rate, self.phi_advance)
+    def forward(self, spect):
+        return phase_vocoder(spect, self.rate, self.phi_advance)
 
     def __repr__(self):
         param_str = '(rate={})'.format(self.rate)
         return self.__class__.__name__ + param_str
 
 
-def Spectrogram(n_fft=2048, hop_length=None, len_win=None,
+def Spectrogram(fft_len=2048, hop_len=None, frame_len=None,
                 window=None, pad=0, pad_mode="reflect", power=1., **kwargs):
     """
     Get spectrogram module.
 
     Args:
 
-        n_fft (int): FFT window size. Defaults to 2048.
-        hop_length (int): Number audio of frames between STFT columns.
-            Defaults to n_fft // 4.
-        len_win (int): Size of stft window. Defaults to n_fft.
+        fft_len (int): FFT window size. Defaults to 2048.
+        hop_len (int): Number audio of frames between STFT columns.
+            Defaults to fft_len // 4.
+        frame_len (int): Size of stft window. Defaults to fft_len.
         window (Tensor): 1-D tensor.
-            Defaults to Hanning Window of size len_win.
+            Defaults to Hann Window of size frame_len.
         pad (int): Amount of padding to apply to signal. Defaults to 0.
         pad_mode: padding method (see torch.nn.functional.pad).
             Defaults to "reflect".
@@ -211,9 +260,9 @@ def Spectrogram(n_fft=2048, hop_length=None, len_win=None,
     """
     return nn.Sequential(
         STFT(
-            n_fft,
-            hop_length,
-            len_win,
+            fft_len,
+            hop_len,
+            frame_len,
             window,
             pad,
             pad_mode,
@@ -221,21 +270,36 @@ def Spectrogram(n_fft=2048, hop_length=None, len_win=None,
         ComplexNorm(power))
 
 
-def Melspectrogram(n_mels=128, sr=44100, f_min=0.0,
-                   f_max=None, n_stft=None, **kwargs):
+def Melspectrogram(
+        num_bands=128,
+        sample_rate=16000,
+        min_freq=0.0,
+        max_freq=None,
+        num_bins=None,
+        mel_filterbank=None,
+        **kwargs):
     """
     Get melspectrogram module.
 
     Args:
-        n_mels (int): number of mel bins. Defaults to 128.
-        sr (int): sample rate of audio signal. Defaults to 44100.
-        f_max (float, optional): maximum frequency. Defaults to sr // 2.
-        f_min (float): minimum frequency. Defaults to 0.
-        n_stft (int, optional): number of filter banks from stft.
-            Defaults to n_fft//2 + 1 if 'n_fft' in kwargs else 1025.
+        num_bands (int): number of mel bins. Defaults to 128.
+        sample_rate (int): sample rate of audio signal. Defaults to 44100.
+        min_freq (float): minimum frequency. Defaults to 0.
+        max_freq (float, optional): maximum frequency. Defaults to sample_rate // 2.
+        num_bins (int, optional): number of filter banks from stft.
+            Defaults to fft_len//2 + 1 if 'fft_len' in kwargs else 1025.
+        mel_filterbank (class): MelFilterbank class to build filterbank matrix
         **kwargs: torchaudio_contrib.Spectrogram parameters.
     """
-    n_fft = kwargs.get('n_fft', None)
-    n_stft = n_fft // 2 + 1 if n_fft else n_stft
+    fft_len = kwargs.get('fft_len', None)
+    num_bins = fft_len // 2 + 1 if fft_len else 1025
+
+    # Check if custom MelFilterbank is passed
+    if mel_filterbank is None:
+        mel_filterbank = MelFilterbank
+
+    mel_fb_matrix = mel_filterbank(
+        num_bands, sample_rate, min_freq, max_freq, num_bins).get_filterbank()
+
     return nn.Sequential(*Spectrogram(**kwargs),
-                         MelFilterbank(n_mels, sr, f_min, f_max, n_stft))
+                         ApplyFilterbank(mel_fb_matrix))
