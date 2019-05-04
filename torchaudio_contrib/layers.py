@@ -178,10 +178,10 @@ class MelFilterbank(Filterbank):
         """
         Converting mel values into frequency
         """
+        mel = torch.as_tensor(mel).float()
+
         if self.htk:
             return 700. * (10**(mel / 2595.) - 1.)
-
-        mel = torch.as_tensor(mel).float()
 
         f_min = 0.0
         f_sp = 200.0 / 3
@@ -198,10 +198,11 @@ class MelFilterbank(Filterbank):
         """
         Converting frequency into mel values
         """
+        hz = torch.as_tensor(hz).float()
+
         if self.htk:
             return 2595. * torch.log10(torch.tensor(1.) + (hz / 700.))
 
-        hz = torch.as_tensor(hz).float()
         f_min = 0.0
         f_sp = 200.0 / 3
 
@@ -225,9 +226,11 @@ class MelFilterbank(Filterbank):
             from_hertz=self.from_hertz)
 
     def __repr__(self):
-        param_str = '(num_bands={}, sample_rate={}, min_freq={}, max_freq={})'.format(
-            self.num_bands, self.sample_rate, self.min_freq, self.max_freq)
-        return self.__class__.__name__ + param_str
+        param_str1 = '(num_bands={}, sample_rate={}'.format(
+            self.num_bands, self.sample_rate)
+        param_str2 = ', min_freq={}, max_freq={})'.format(
+            self.min_freq, self.max_freq)
+        return self.__class__.__name__ + param_str1 + param_str2
 
 
 class StretchSpecTime(_ModuleNoStateBuffers):
@@ -236,14 +239,14 @@ class StretchSpecTime(_ModuleNoStateBuffers):
 
     Args:
 
-        rate (float): rate to speed up or slow down by.
+        rate (float): rate to speed up or slow down by. Defaults to 1.
         hop_len (int): Number audio of frames between STFT columns.
             Defaults to 512.
         num_bins (int, optional): number of filter banks from stft.
             Defaults to 1025.
     """
 
-    def __init__(self, rate, hop_len=512, num_bins=1025):
+    def __init__(self, rate=1., hop_len=512, num_bins=1025):
 
         super(StretchSpecTime, self).__init__()
 
@@ -282,12 +285,27 @@ def Spectrogram(fft_len=2048, hop_len=None, frame_len=None,
         power (float): Exponent of the magnitude. Defaults to 1.
         **kwargs: Other torch.stft parameters, see torch.stft for more details.
     """
-    return nn.Sequential(STFT(fft_len, hop_len, frame_len,
-                              window, pad, pad_mode, **kwargs), ComplexNorm(power))
+    return nn.Sequential(
+        STFT(
+            fft_len,
+            hop_len,
+            frame_len,
+            window,
+            pad,
+            pad_mode,
+            **kwargs),
+        ComplexNorm(power))
 
 
-def Melspectrogram(num_bands=128, sample_rate=22050, min_freq=0.0,
-                   max_freq=None, num_bins=None, htk=False, mel_filterbank=None, **kwargs):
+def Melspectrogram(
+        num_bands=128,
+        sample_rate=22050,
+        min_freq=0.0,
+        max_freq=None,
+        num_bins=None,
+        htk=False,
+        mel_filterbank=None,
+        **kwargs):
     """
     Get melspectrogram module.
 
@@ -310,7 +328,12 @@ def Melspectrogram(num_bands=128, sample_rate=22050, min_freq=0.0,
         mel_filterbank = MelFilterbank
 
     mel_fb_matrix = mel_filterbank(
-        num_bands, sample_rate, min_freq, max_freq, num_bins, htk).get_filterbank()
+        num_bands,
+        sample_rate,
+        min_freq,
+        max_freq,
+        num_bins,
+        htk).get_filterbank()
 
     return nn.Sequential(*Spectrogram(power=2., **kwargs),
                          ApplyFilterbank(mel_fb_matrix))

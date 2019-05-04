@@ -16,7 +16,7 @@ class Tester(unittest.TestCase):
         """
         STFT should handle mutlichannel signal correctly, as well as both cpu and cuda.
 
-        Padding (?)
+        Padding: Value in having padding outside of torch.stft?
         """
 
         def _test_mono_cpu():
@@ -57,7 +57,7 @@ class Tester(unittest.TestCase):
             assert manual_spect == spect[0][0][0]
             assert stft.dim() - spect.dim() == 1
 
-        for p in [1, 2, 0.7]:
+        for p in [1., 2., 0.7]:
             _test_powers(p)
 
     def test_ApplyFilterbank(self):
