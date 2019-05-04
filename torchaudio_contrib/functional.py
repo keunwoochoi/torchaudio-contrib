@@ -11,7 +11,7 @@ def stft(signal, fft_len, hop_len, window,
     Args:
         signal (Tensor): Tensor of audio of size (channel, time)
             or (batch, channel, time).
-        fft_len (int): FFT window size. Defaults to 2048.
+        fft_len (int): FFT window size.
         hop_len (int): Number audio of frames between STFT columns.
         window (Tensor): 1-D tensor.
         pad (int): Amount of padding to apply to signal.
@@ -47,13 +47,13 @@ def stft(signal, fft_len, hop_len, window,
     return spect
 
 
-def complex_norm(signal, power=1.0):
+def complex_norm(tensor, power=1.0):
     """
-    Normalize complex signal.
+    Normalize complex input.
     """
     if power == 1.:
-        return torch.norm(signal, 2, -1)
-    return torch.norm(signal, 2, -1).pow(power)
+        return torch.norm(tensor, 2, -1)
+    return torch.norm(tensor, 2, -1).pow(power)
 
 
 def create_mel_filter(num_bands, sample_rate, min_freq,
@@ -85,8 +85,8 @@ def create_mel_filter(num_bands, sample_rate, min_freq,
     # Find mel values, and convert them to frequency units
     m_pts = torch.linspace(m_min, m_max, num_bands + 2)
     f_pts = to_hertz(m_pts)
-
     f_diff = f_pts[1:] - f_pts[:-1]  # (num_bands + 1)
+
     # (num_bins, num_bands + 2)
     slopes = f_pts.unsqueeze(0) - stft_freqs.unsqueeze(1)
 
@@ -153,33 +153,35 @@ def phase_vocoder(spect, rate, phi_advance):
     pad_shape = [0, 0] + [0, 2] + [0] * 6
     spect = torch.nn.functional.pad(spect, pad_shape)
 
-    spec_0 = spect[:, :, :, time_steps.long()]  # (new_bins, num_bins, 2)
-    spec_1 = spect[:, :, :, (time_steps + 1).long()]  # (new_bins, num_bins, 2)
+    spect_0 = spect[:, :, :, time_steps.long()]  # (new_bins, num_bins, 2)
+    # (new_bins, num_bins, 2)
+    spect_1 = spect[:, :, :, (time_steps + 1).long()]
 
-    spec_0_angle = angle(spec_0)  # (new_bins, num_bins)
-    spec_1_angle = angle(spec_1)  # (new_bins, num_bins)
+    spect_0_angle = angle(spect_0)  # (new_bins, num_bins)
+    spect_1_angle = angle(spect_1)  # (new_bins, num_bins)
 
-    spec_0_norm = torch.norm(spec_0, dim=-1)  # (new_bins, num_bins)
-    spec_1_norm = torch.norm(spec_1, dim=-1)  # (new_bins, num_bins)
+    spect_0_norm = torch.norm(spect_0, dim=-1)  # (new_bins, num_bins)
+    spect_1_norm = torch.norm(spect_1, dim=-1)  # (new_bins, num_bins)
 
-    spec_phase = spec_1_angle - spec_0_angle - \
+    spect_phase = spect_1_angle - spect_0_angle - \
         phi_advance  # (new_bins, num_bins)
-    spec_phase = spec_phase - 2 * math.pi * \
-        torch.round(spec_phase / (2 * math.pi))  # (new_bins, num_bins)
+    spect_phase = spect_phase - 2 * math.pi * \
+        torch.round(spect_phase / (2 * math.pi))  # (new_bins, num_bins)
 
     # Compute Phase Accum
-    phase = spec_phase + phi_advance  # (new_bins, num_bins)
+    phase = spect_phase + phi_advance  # (new_bins, num_bins)
 
     phase = torch.cat([phase_0, phase[:, :, :, :-1]], dim=-1)
 
     phase_acc = torch.cumsum(phase, -1)  # (new_bins, num_bins)
 
-    mag = alphas * spec_1_norm + (1 - alphas) * \
+    mag = alphas * spect_1_norm + (1 - alphas) * \
         spec_0_norm  # (time//rate+1, num_bins)
 
-    spec_stretch_real = mag * torch.cos(phase_acc)  # (new_bins, num_bins)
-    spec_stretch_imag = mag * torch.sin(phase_acc)  # (new_bins, num_bins)
+    spect_stretch_real = mag * torch.cos(phase_acc)  # (new_bins, num_bins)
+    spect_stretch_imag = mag * torch.sin(phase_acc)  # (new_bins, num_bins)
 
-    spec_stretch = torch.stack([spec_stretch_real, spec_stretch_imag], dim=-1)
+    spect_stretch = torch.stack(
+        [spect_stretch_real, spect_stretch_imag], dim=-1)
 
-    return spec_stretch
+    return spect_stretch

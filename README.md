@@ -45,18 +45,42 @@ This is an early draft for a possible replacement of pytorch/audio. At this stag
 
 
 ## Overview
-### `STFT`/`stft`
-  ```python
-  class STFT(n_fft, hop_length=None, len_win=None, window=None, center=True, pad="reflect", normalized=False, onesided=True)
-  def stft(x, n_fft, hop_length=None, len_win=None, window=None, center=True, pad="reflect", normalized=False, onesided=True)
-  ```
-
-### `Melspectrogram`/`melspectrogram`
+### `STFT`
 ```python
-class Melspectrogram(n_mels, sr, f_max, f_min, *args, **kwargs)
-def melspectrogram(x, n_mels, sr, f_max, f_min, *args, **kwargs)
+class STFT(fft_len=2048, hop_len=None, frame_len=None, window=None, pad=0, pad_mode="reflect", **kwargs)
+def stft(signal, fft_len, hop_len, window, pad=0, pad_mode="reflect", **kwargs)
 ```
-These are wrappers for `STFT` to which `*args` and `**kwargs` are passed to.
+
+### `MelFilterbank`
+```python
+class MelFilterbank(num_bands=128, sample_rate=16000, min_freq=0.0, max_freq=None, num_bins=1025, htk=False)
+def create_mel_filter(num_bands, sample_rate, min_freq, max_freq, num_bins, to_hertz, from_hertz)
+```
+
+### `Spectrogram`
+```python
+def Spectrogram(fft_len=2048, hop_len=None, frame_len=None, window=None, pad=0, pad_mode="reflect", power=1., **kwargs)
+```
+Creates an `nn.Sequential`:
+```
+>>> Sequential(
+>>>  (0): STFT(fft_len=2048, hop_len=512, frame_len=2048)
+>>>  (1): ComplexNorm(power=1.0)
+)
+```
+
+### `Melspectrogram`
+```python
+def Melspectrogram(num_bands=128, sample_rate=16000, min_freq=0.0, max_freq=None, num_bins=None, htk=False, mel_filterbank=None, **kwargs)
+```
+Creates an `nn.Sequential`:
+```
+>>> Sequential(
+>>>  (0): STFT(fft_len=2048, hop_len=512, frame_len=2048)
+>>>  (1): ComplexNorm(power=2.0)
+>>>  (2): ApplyFilterbank()
+)
+```
 
 ### `AmplitudeToDb`/`amplitude_to_db`
 ```python

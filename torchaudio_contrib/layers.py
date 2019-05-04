@@ -24,13 +24,8 @@ class _ModuleNoStateBuffers(nn.Module):
 
         buffers = self._buffers
         self._buffers = {}
-        result = super(
-            _ModuleNoStateBuffers,
-            self)._load_from_state_dict(
-            state_dict,
-            prefix,
-            *args,
-            **kwargs)
+        result = super(_ModuleNoStateBuffers, self)._load_from_state_dict(
+            state_dict, prefix, *args, **kwargs)
         self._buffers = buffers
         return result
 
@@ -94,20 +89,14 @@ class STFT(_ModuleNoStateBuffers):
                 or (batch, channel, time, freq, complex).
         """
 
-        spect = stft(
-            signal,
-            self.fft_len,
-            self.hop_len,
-            window=self.window,
-            pad=self.pad,
-            pad_mode=self.pad_mode,
-            **self.kwargs)
+        spect = stft(signal, self.fft_len, self.hop_len, window=self.window,
+                     pad=self.pad, pad_mode=self.pad_mode, **self.kwargs)
 
         return spect
 
     def __repr__(self):
-        param_str = '(fft_len={}, hop_len={}, frame_len={}, pad={})'.format(
-            self.fft_len, self.hop_len, self.window.size(0), self.pad)
+        param_str = '(fft_len={}, hop_len={}, frame_len={})'.format(
+            self.fft_len, self.hop_len, self.window.size(0))
         return self.__class__.__name__ + param_str
 
 
@@ -120,8 +109,11 @@ class ComplexNorm(nn.Module):
         super(ComplexNorm, self).__init__()
         self.power = power
 
-    def forward(self, spect):
-        return complex_norm(spect, self.power)
+    def forward(self, stft):
+        return complex_norm(stft, self.power)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(power={})'.format(self.power)
 
 
 class ApplyFilterbank(_ModuleNoStateBuffers):
@@ -162,15 +154,16 @@ class MelFilterbank(Filterbank):
 
     Args:
         num_bands (int): number of mel bins. Defaults to 128.
-        sample_rate (int): sample rate of audio signal. Defaults to 44100.
+        sample_rate (int): sample rate of audio signal. Defaults to 22050.
         min_freq (float): minimum frequency. Defaults to 0.
         max_freq (float, optional): maximum frequency. Defaults to sample_rate // 2.
         num_bins (int, optional): number of filter banks from stft.
             Defaults to 2048//2 + 1.
+        htk (bool, optional): use HTK formula instead of Slaney. Defaults to False.
     """
 
-    def __init__(self, num_bands=128, sample_rate=16000,
-                 min_freq=0.0, max_freq=None, num_bins=1025):
+    def __init__(self, num_bands=128, sample_rate=22050,
+                 min_freq=0.0, max_freq=None, num_bins=1025, htk=False):
 
         super(MelFilterbank, self).__init__()
 
@@ -179,18 +172,47 @@ class MelFilterbank(Filterbank):
         self.min_freq = min_freq
         self.max_freq = max_freq if max_freq else sample_rate // 2
         self.num_bins = num_bins
+        self.htk = htk
 
     def to_hertz(self, mel):
         """
-        Converting mel values into frequency using HTK formula
+        Converting mel values into frequency
         """
-        return 700. * (10**(mel / 2595.) - 1.)
+        if self.htk:
+            return 700. * (10**(mel / 2595.) - 1.)
+
+        mel = torch.as_tensor(mel).float()
+
+        f_min = 0.0
+        f_sp = 200.0 / 3
+        hz = f_min + f_sp * mel
+
+        min_log_hz = 1000.0
+        min_log_mel = (min_log_hz - f_min) / f_sp
+        logstep = math.log(6.4) / 27.0
+
+        return torch.where(mel >= min_log_mel, min_log_hz *
+                           torch.exp(logstep * (mel - min_log_mel)), hz)
 
     def from_hertz(self, hz):
         """
-        Converting frequency into mel values using HTK formula
+        Converting frequency into mel values
         """
-        return 2595. * torch.log10(torch.tensor(1.) + (hz / 700.))
+        if self.htk:
+            return 2595. * torch.log10(torch.tensor(1.) + (hz / 700.))
+
+        hz = torch.as_tensor(hz).float()
+        f_min = 0.0
+        f_sp = 200.0 / 3
+
+        mel = (hz - f_min) / f_sp
+
+        min_log_hz = 1000.0
+        min_log_mel = (min_log_hz - f_min) / f_sp
+        logstep = math.log(6.4) / 27.0
+
+        return torch.where(hz >= min_log_hz, min_log_mel +
+                           torch.log(hz / min_log_hz) / logstep, mel)
 
     def get_filterbank(self):
         return create_mel_filter(
@@ -231,8 +253,10 @@ class StretchSpecTime(_ModuleNoStateBuffers):
 
         self.register_buffer('phi_advance', phi_advance)
 
-    def forward(self, spect):
-        return phase_vocoder(spect, self.rate, self.phi_advance)
+    def forward(self, spect, rate=None):
+        if rate is None:
+            rate = self.rate
+        return phase_vocoder(spect, rate, self.phi_advance)
 
     def __repr__(self):
         param_str = '(rate={})'.format(self.rate)
@@ -255,40 +279,27 @@ def Spectrogram(fft_len=2048, hop_len=None, frame_len=None,
         pad (int): Amount of padding to apply to signal. Defaults to 0.
         pad_mode: padding method (see torch.nn.functional.pad).
             Defaults to "reflect".
-        power (float): What power to normalize to. Defaults to 1.
+        power (float): Exponent of the magnitude. Defaults to 1.
         **kwargs: Other torch.stft parameters, see torch.stft for more details.
     """
-    return nn.Sequential(
-        STFT(
-            fft_len,
-            hop_len,
-            frame_len,
-            window,
-            pad,
-            pad_mode,
-            **kwargs),
-        ComplexNorm(power))
+    return nn.Sequential(STFT(fft_len, hop_len, frame_len,
+                              window, pad, pad_mode, **kwargs), ComplexNorm(power))
 
 
-def Melspectrogram(
-        num_bands=128,
-        sample_rate=16000,
-        min_freq=0.0,
-        max_freq=None,
-        num_bins=None,
-        mel_filterbank=None,
-        **kwargs):
+def Melspectrogram(num_bands=128, sample_rate=22050, min_freq=0.0,
+                   max_freq=None, num_bins=None, htk=False, mel_filterbank=None, **kwargs):
     """
     Get melspectrogram module.
 
     Args:
         num_bands (int): number of mel bins. Defaults to 128.
-        sample_rate (int): sample rate of audio signal. Defaults to 44100.
+        sample_rate (int): sample rate of audio signal. Defaults to 22050.
         min_freq (float): minimum frequency. Defaults to 0.
         max_freq (float, optional): maximum frequency. Defaults to sample_rate // 2.
         num_bins (int, optional): number of filter banks from stft.
             Defaults to fft_len//2 + 1 if 'fft_len' in kwargs else 1025.
-        mel_filterbank (class): MelFilterbank class to build filterbank matrix
+        htk (bool, optional): use HTK formula instead of Slaney. Defaults to False.
+        mel_filterbank (class, optional): MelFilterbank class to build filterbank matrix
         **kwargs: torchaudio_contrib.Spectrogram parameters.
     """
     fft_len = kwargs.get('fft_len', None)
@@ -299,7 +310,7 @@ def Melspectrogram(
         mel_filterbank = MelFilterbank
 
     mel_fb_matrix = mel_filterbank(
-        num_bands, sample_rate, min_freq, max_freq, num_bins).get_filterbank()
+        num_bands, sample_rate, min_freq, max_freq, num_bins, htk).get_filterbank()
 
-    return nn.Sequential(*Spectrogram(**kwargs),
+    return nn.Sequential(*Spectrogram(power=2., **kwargs),
                          ApplyFilterbank(mel_fb_matrix))
