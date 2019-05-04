@@ -1,237 +1,187 @@
 import torch
-import numpy as np
+import math
+import torch.nn.functional as F
 
 
-def _get_time_values(sig_length, sr, hop):
+def stft(signal, fft_len, hop_len, window,
+         pad=0, pad_mode="reflect", **kwargs):
     """
-    Get the time axis values given the signal length, sample
-    rate and hop size.
+    Wrap torch.stft allowing for multi-channel stft.
+
+    Args:
+        signal (Tensor): Tensor of audio of size (channel, time)
+            or (batch, channel, time).
+        fft_len (int): FFT window size.
+        hop_len (int): Number audio of frames between STFT columns.
+        window (Tensor): 1-D tensor.
+        pad (int): Amount of padding to apply to signal.
+        pad_mode: padding method (see torch.nn.functional.pad).
+        **kwargs: Other torch.stft parameters, see torch.stft for more details.
+
+    Returns:
+        Tensor: (batch, channel, num_bins, time, complex)
+            or (channel, num_bins, time, complex)
+
+    Example:
+        >>> signal = torch.randn(16, 2, 10000)
+        >>> # window_length <= fft_len
+        >>> window = torch.hamming_window(window_length=2048)
+        >>> x = stft(signal, 2048, 512, window)
+        >>> x.shape
+        torch.Size([16, 2, 1025, 20])
     """
-    return torch.linspace(0, sig_length/sr, sig_length//hop+1)
+
+    # (!) Only 3D, 4D, 5D padding with non-constant
+    # padding are supported for now.
+    if pad > 0:
+        signal = F.pad(signal, (pad, pad), pad_mode)
+
+    leading_dims = signal.shape[:-1]
+
+    signal = signal.reshape(-1, signal.size(-1))
+
+    spect = torch.stft(signal, fft_len, hop_len, window=window,
+                       win_length=window.size(0), **kwargs)
+    spect = spect.reshape(leading_dims + spect.shape[1:])
+
+    return spect
 
 
-def _get_freq_values(n_fft, sr):
+def complex_norm(tensor, power=1.0):
     """
-    Get the frequency axis values given the number of FFT bins
-    and sample rate.
+    Normalize complex input.
     """
-    return torch.linspace(0, sr/2, n_fft//2 + 1)
+    if power == 1.:
+        return torch.norm(tensor, 2, -1)
+    return torch.norm(tensor, 2, -1).pow(power)
 
 
-def get_spectrogram_axis(sig_length, sr, n_fft=2048, hop=512):
-    t = _get_time_values(sig_length, sr, hop)
-    f = _get_freq_values(n_fft, sr)
-    return t, f
-
-
-def STFT(sig, n_fft=2048, hop=None, window=None, **kwargs):
-    """A wrapper for torch.stft with some preset parameters.
-    Returned value keeps both real and imageinary parts.
-    For STFT magnitude, see spectrogram
-
-    input -> (batch, channel, time) or (channel, time)
-    output -> (batch, channel, freq, hop, complex) or (channel, freq, hop, complex)
-
+def create_mel_filter(num_bands, sample_rate, min_freq,
+                      max_freq, num_bins, to_hertz, from_hertz):
     """
-    if hop is None:
-        hop = n_fft // 4
-    if window is None:
-        window = torch.hann_window(n_fft)
+    Creates filter matrix to transform fft frequency bins
+    into mel frequency bins.
+    Equivalent to librosa.filters.mel(sample_rate, fft_len, htk=True, norm=None).
 
-    if sig.dim() == 3:
-        batch, channel, time = sig.size()
-        out_shape = [batch, channel, n_fft//2+1, -1, 2]
-    elif sig.dim() == 2:
-        channel, time = sig.size()
-        out_shape = [channel, n_fft//2+1, -1, 2]
-    else:
-        raise ValueError('Input tensor dim() must be either 2 or 3.')
+    Args:
+        num_bands (int): number of mel bins.
+        sample_rate (int): sample rate of audio signal.
+        min_freq (float): minimum frequency.
+        max_freq (float): maximum frequency.
+        num_bins (int): number of filter banks from stft.
+        to_hertz (function): convert from mel freq to hertz
+        from_hertz (function): convert from hertz to mel freq
 
-    sig = sig.reshape(-1, time)
-    stft = torch.stft(sig, n_fft, hop, window=window, **kwargs)
-    stft = stft.reshape(out_shape)
-
-    return stft
-
-
-def spectrogram(sig, n_fft=2048, hop=None, window=None, power=1.0, **kwargs):
+    Returns:
+        filterbank (Tensor): (num_bins, num_bands)
     """
-    returns magnitude of spectrogram
-
-    input -> (batch, channel, time) or (channel, time)
-    output -> (batch, channel, freq, hop) or (channel, freq, hop)
-    """
-    stft = STFT(sig, n_fft, hop=hop, window=window, **kwargs)
-    if power is None:
-        return stft
-    return stft.pow(2).sum(-1).pow(power / 2.0)
-
-
-def _hertz_to_mel(f):
-    '''
-    Converting frequency into mel values using HTK formula
-    '''
-    return 2595. * torch.log10(torch.tensor(1.) + (f / 700.))
-
-
-def _mel_to_hertz(mel):
-    '''
-    Converting mel values into frequency using HTK formula
-    '''
-    return 700. * (10**(mel / 2595.) - 1.)
-
-
-def melspectrogram(sig, n_mels=128, sr=44100, f_min=0.0, f_max=None, *args, **kwargs):
-    """
-    returns Melspectrogram
-    """
-    spec_amp = spectrogram(*args, **kwargs)
-    mel_fb, _ = create_mel_filter(spec_amp.size(-1), sr, n_mels, **kwargs)
-    mel_spec_amp = torch.matmul(spec_amp, mel_fb)
-    return mel_spec_amp
-
-
-def create_mel_filter(n_stft, sr, n_mels=128, f_min=0.0, f_max=None):
-    '''
-    Creates filter matrix to transform fft frequency bins into mel frequency bins.
-    Equivalent to librosa.filters.mel(sr, n_fft, htk=True, norm=None).
-
-    Output Tensor shape -> (n_mels, n_stft)
-    '''
     # Convert to find mel lower/upper bounds
-    f_max = f_max if f_max else sr // 2
-    m_min = 0. if f_min == 0 else _hertz_to_mel(f_min)
-    m_max = _hertz_to_mel(f_max)
+    m_min = from_hertz(min_freq)
+    m_max = from_hertz(max_freq)
 
     # Compute stft frequency values
-    stft_freqs = torch.linspace(f_min, f_max, n_stft)
+    stft_freqs = torch.linspace(min_freq, max_freq, num_bins)
 
     # Find mel values, and convert them to frequency units
-    m_pts = torch.linspace(m_min, m_max, n_mels + 2)
-    f_pts = _mel_to_hertz(m_pts)
+    m_pts = torch.linspace(m_min, m_max, num_bands + 2)
+    f_pts = to_hertz(m_pts)
+    f_diff = f_pts[1:] - f_pts[:-1]  # (num_bands + 1)
 
-    f_diff = f_pts[1:] - f_pts[:-1]  # (n_mels + 1)
-    # (n_stft, n_mels + 2)
+    # (num_bins, num_bands + 2)
     slopes = f_pts.unsqueeze(0) - stft_freqs.unsqueeze(1)
 
-    down_slopes = (-1. * slopes[:, :-2]) / f_diff[:-1]  # (n_stft, n_mels)
-    up_slopes = slopes[:, 2:] / f_diff[1:]  # (n_stft, n_mels)
-    fb = torch.clamp(torch.min(down_slopes, up_slopes), min=0.)
+    down_slopes = (-1. * slopes[:, :-2]) / f_diff[:-1]  # (num_bins, num_bands)
+    up_slopes = slopes[:, 2:] / f_diff[1:]  # (num_bins, num_bands)
+    filterbank = torch.clamp(torch.min(down_slopes, up_slopes), min=0.)
 
-    return fb, f_pts[:-2]
+    return filterbank
 
 
-def amplitude_to_db(spec, ref=1.0, amin=1e-10, top_db=80.0):
+def apply_filterbank(spect, filterbank):
     """
-    Amplitude spectrogram to the db scale
+    Transform spectrogram given a filterbank matrix.
 
-    Input Tensor shape -> (freq, time)
-    Output Tensor shape -> (freq, time)
+    Args:
+        spect (Tensor): (batch, channel, num_bins, time)
+        filterbank (Tensor): (num_bins, num_bands)
+
+    Returns:
+        (Tensor): (batch, channel, num_bands, time)
     """
-    power = spec**2
-    return power_to_db(power, ref, amin, top_db)
-
-
-def power_to_db(spec, ref=1.0, amin=1e-10, top_db=80.0):
-    """
-    Power spectrogram to the db scale
-
-    Input Tensor shape -> (freq, time)
-    Output Tensor shape -> (freq, time)
-    """
-    if amin <= 0:
-        raise ParameterError('amin must be strictly positive')
-
-    if callable(ref):
-        ref_value = ref(spec_norm)
-    else:
-        ref_value = torch.tensor(ref)
-
-    log_spec = 10*torch.log10(torch.clamp(spec, min=amin))
-    log_spec -= 10*torch.log10(torch.clamp(ref_value, min=amin))
-
-    if top_db is not None:
-        if top_db < 0:
-            raise ParameterError('top_db must be non-negative')
-        log_spec = torch.clamp(log_spec, min=(log_spec.max() - top_db))
-
-    return log_spec
-
-
-def db_to_power(spec_db, ref=1.0):
-    """
-    db-scale spectrogram to power spectrogram
-
-    Input Tensor shape -> (freq, time)
-    Output Tensor shape -> (freq, time)
-    """
-    return ref * torch.pow(10., spec_db * 0.1)
+    return torch.matmul(spect.transpose(-2, -1), filterbank).transpose(-2, -1)
 
 
 def angle(tensor):
-    """ 
+    """
     Return angle of a complex tensor with shape (*, 2).
     """
-    return torch.atan2(tensor[...,1], tensor[...,0])
+    return torch.atan2(tensor[..., 1], tensor[..., 0])
 
 
-def magphase(spec, power=1.):
+def magphase(spect, power=1.):
     """
     Separate a complex-valued spectrogram with shape (*,2)
     into its magnitude and phase.
     """
-    mag = spec.pow(2).sum(-1).pow(power/2)
-    phase = angle(spec)
+    mag = complex_norm(spect, power)
+    phase = angle(spect)
     return mag, phase
 
-def phase_vocoder(spec, rate, hop, n_fft):
+
+def phase_vocoder(spect, rate, phi_advance):
     """
-    Phase vocoder. Given a STFT tensor, speed up in time 
+    Phase vocoder. Given a STFT tensor, speed up in time
     without modifying pitch by a factor of `rate`.
 
-    Input Tensor shape -> (batch, channel, freq, time, 2)
-    Output Tensor shape -> (batch, channel, freq, time//rate+1, 2)
+    Args:
+        spect (Tensor): (batch, channel, num_bins, time, 2)
+        rate (float): Speed-up factor
+        phi_advance (Tensor): Expected phase advance in each bin. (num_bins, 1)
+
+    Returns:
+      (Tensor): (batch, channel, num_bins, new_bins, 2) with new_bins = num_bins//rate+1
     """
 
-    fft_size = n_fft//2 + 1
-    time_steps = torch.arange(0, spec.size(
-        3), rate, device=spec.device)  # (new_time)
-    phi_advance = torch.linspace(
-        0, np.pi * hop, fft_size, device=spec.device)[..., None]
+    time_steps = torch.arange(0, spect.size(
+        3), rate, device=spect.device)  # (new_bins,)
 
-    alphas = (time_steps % 1)  # .unsqueeze(1) # (new_time)
+    alphas = (time_steps % 1)  # (new_bins,)
 
-    phase_0 = angle(spec[:, :, :, :1])
+    phase_0 = angle(spect[:, :, :, :1])
 
     # Time Padding
-    pad_shape = [0, 0]+[0, 2]+[0]*6
-    spec = torch.nn.functional.pad(spec, pad_shape)
+    pad_shape = [0, 0] + [0, 2] + [0] * 6
+    spect = torch.nn.functional.pad(spect, pad_shape)
 
-    spec_0 = spec[:, :, :, time_steps.long()]  # (new_time, freq, 2)
-    spec_1 = spec[:, :, :, (time_steps + 1).long()]  # (new_time, freq, 2)
+    spect_0 = spect[:, :, :, time_steps.long()]  # (new_bins, num_bins, 2)
+    # (new_bins, num_bins, 2)
+    spect_1 = spect[:, :, :, (time_steps + 1).long()]
 
-    spec_0_angle = angle(spec_0) # (new_time, freq)
-    spec_1_angle = angle(spec_1) # (new_time, freq)
+    spect_0_angle = angle(spect_0)  # (new_bins, num_bins)
+    spect_1_angle = angle(spect_1)  # (new_bins, num_bins)
 
-    spec_0_norm = torch.norm(spec_0, dim=-1)  # (new_time, freq)
-    spec_1_norm = torch.norm(spec_1, dim=-1)  # (new_time, freq)
+    spect_0_norm = torch.norm(spect_0, dim=-1)  # (new_bins, num_bins)
+    spect_1_norm = torch.norm(spect_1, dim=-1)  # (new_bins, num_bins)
 
-    spec_phase = spec_1_angle - spec_0_angle - phi_advance  # (new_time, freq)
-    spec_phase = spec_phase - 2 * np.pi * \
-        torch.round(spec_phase / (2 * np.pi))  # (new_time, freq)
+    spect_phase = spect_1_angle - spect_0_angle - \
+        phi_advance  # (new_bins, num_bins)
+    spect_phase = spect_phase - 2 * math.pi * \
+        torch.round(spect_phase / (2 * math.pi))  # (new_bins, num_bins)
 
     # Compute Phase Accum
-    phase = spec_phase + phi_advance  # (new_time, freq)
+    phase = spect_phase + phi_advance  # (new_bins, num_bins)
 
     phase = torch.cat([phase_0, phase[:, :, :, :-1]], dim=-1)
 
-    phase_acc = torch.cumsum(phase, -1)  # (new_time, freq)
+    phase_acc = torch.cumsum(phase, -1)  # (new_bins, num_bins)
 
-    mag = alphas * spec_1_norm + (1-alphas) * spec_0_norm  # (new_time, freq)
+    mag = alphas * spect_1_norm + (1 - alphas) * \
+        spec_0_norm  # (time//rate+1, num_bins)
 
-    spec_stretch_real = mag * torch.cos(phase_acc)  # (new_time, freq)
-    spec_stretch_imag = mag * torch.sin(phase_acc)  # (new_time, freq)
+    spect_stretch_real = mag * torch.cos(phase_acc)  # (new_bins, num_bins)
+    spect_stretch_imag = mag * torch.sin(phase_acc)  # (new_bins, num_bins)
 
-    spec_stretch = torch.stack([spec_stretch_real, spec_stretch_imag], dim=-1)
+    spect_stretch = torch.stack(
+        [spect_stretch_real, spect_stretch_imag], dim=-1)
 
-    return spec_stretch
+    return spect_stretch

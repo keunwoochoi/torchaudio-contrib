@@ -1,142 +1,339 @@
-
-
 import torch
+import math
 import torch.nn as nn
-import torch.nn.functional as F
 
-from .functional import spectrogram, create_mel_filter
+from .functional import stft, complex_norm, \
+    create_mel_filter, phase_vocoder, apply_filterbank
 
 
-class Spectrogram(nn.Module):
+class _ModuleNoStateBuffers(nn.Module):
     """
-    Module that outputs the spectrogram
-    of an audio signal with shape (batch, channel, time_hop, frequency_bins).
+    Extension of nn.Module that removes buffers
+    from state_dict.
+    """
 
-    Its implemented as a layer so that the computation can be faster (done dynamically
-    on GPU) and no need to store the transforms. More information:
-        - https://github.com/keunwoochoi/kapre
-        - https://arxiv.org/pdf/1706.05781.pdf
+    def state_dict(self, destination=None, prefix='', keep_vars=False):
+        ret = super(_ModuleNoStateBuffers, self).state_dict(
+            destination, prefix, keep_vars)
+        for k in self._buffers:
+            del ret[prefix + k]
+        return ret
+
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        # temporarily hide the buffers; we do not want to restore them
+
+        buffers = self._buffers
+        self._buffers = {}
+        result = super(_ModuleNoStateBuffers, self)._load_from_state_dict(
+            state_dict, prefix, *args, **kwargs)
+        self._buffers = buffers
+        return result
+
+
+class STFT(_ModuleNoStateBuffers):
+    """
+    Compute the stft transform of a multi-channel signal or
+    batch of multi-channel signals.
 
     Args:
-     * hop: int > 0
-       -  Hop length between frames in sample,  should be <= n_fft.
-       -  Default: None (in which case n_fft // 4 is used)
-     * n_fft: int > 0 
-       -  Size of the fft.
-       -  Default: 2048
-     * pad: int >= 0
-       -  Amount of two sided zero padding to apply.
-       -  Default: 0
-     * window: torch.Tensor,
-       -  Windowing used in the stft.
-       -  Default: None (in which case torch.hann_window(n_fft) is used)
-     * sr: int > 0
-       -  Sampling rate of the audio signal. This may not be the same in all samples (?)
-       -  Default: 44100
-     * power: int = 1,2,None
-       -  Power to normalize the spectrogram to, make None to work with complex stft
-       -  Default: 1
-     * kwargs: 
-       -  Any named arguments to be passed to the stft
+
+        fft_len (int): FFT window size. Defaults to 2048.
+        hop_len (int): Number audio of frames between stft columns.
+            Defaults to fft_len // 4.
+        frame_len (int): Size of stft window. Defaults to fft_len.
+        window (Tensor): 1-D tensor. Defaults to Hann Window
+            of size frame_len.
+        pad (int): Amount of padding to apply to signal. Defaults to 0.
+        pad_mode: padding method (see torch.nn.functional.pad).
+            Defaults to "reflect".
+        **kwargs: Other torch.stft parameters, see torch.stft for more details.
 
     """
 
-    def __init__(self, hop=None, n_fft=2048, pad=0, window=None, sr=44100, **kwargs):
+    def __init__(self, fft_len=2048, hop_len=None, frame_len=None,
+                 window=None, pad=0, pad_mode="reflect", **kwargs):
 
-        super(Spectrogram, self).__init__()
+        super(STFT, self).__init__()
 
-        if window is None:
-            window = torch.hann_window(n_fft)
+        # Get default values, window so it can be registered as buffer
+        self.fft_len, self.hop_len, window = self._stft_defaults(
+            fft_len, hop_len, frame_len, window)
 
-        self.window = self._build_window(window)
-        self.hop = n_fft // 4 if hop is None else hop
-        self.n_fft = n_fft
         self.pad = pad
-
-        # Not all samples will have the same sr
-        self.sr = sr
+        self.pad_mode = pad_mode
         self.kwargs = kwargs
 
-    def _build_window(self, window):
+        self.register_buffer('window', window)
+
+    def _stft_defaults(self, fft_len, hop_len, frame_len, window):
+        """
+        Handle default values for STFT.
+        """
+        hop_len = fft_len // 4 if hop_len is None else hop_len
+
         if window is None:
-            window = torch.hann_window(n_fft)
+            length = fft_len if frame_len is None else frame_len
+            window = torch.hann_window(length)
         if not isinstance(window, torch.Tensor):
             raise TypeError('window must be a of type torch.Tensor')
-        # In order for the window to be added as one of the Module's
-        # parameters it has to be a nn.Parameter
-        return nn.Parameter(window, requires_grad=False)
 
-    def _out_seq_dim(self, arr):
-        return arr//self.hop+1
+        return fft_len, hop_len, window
 
-    def forward(self, x, lengths=None):
+    def forward(self, signal):
         """
-        Input Tensor shape -> (batch, channel, signal)
-        Output Tensor shape -> (batch, channel, freq, time) or
-            (batch, channel, freq, time, complex) if power=None
+        Args:
+            signal (Tensor): (channel, time) or (batch, channel, time).
+
+        Returns:
+            spect (Tensor): (channel, time, freq, complex)
+                or (batch, channel, time, freq, complex).
         """
 
-        if self.pad > 0:
-            with torch.no_grad():
-                x = F.pad(x, (self.pad, self.pad), "constant")
+        spect = stft(signal, self.fft_len, self.hop_len, window=self.window,
+                     pad=self.pad, pad_mode=self.pad_mode, **self.kwargs)
 
-        spec = spectrogram(x,
-                    n_fft=self.n_fft,
-                    hop=self.hop,
-                    window=self.window,
-                    **self.kwargs)
+        return spect
 
-        return spec
+    def __repr__(self):
+        param_str = '(fft_len={}, hop_len={}, frame_len={})'.format(
+            self.fft_len, self.hop_len, self.window.size(0))
+        return self.__class__.__name__ + param_str
 
 
-class Melspectrogram(Spectrogram):
+class ComplexNorm(nn.Module):
     """
-    Module that outputs the mel-spectrogram (transform on the spectrogram
-    to better represent human perception) of an audio signal.
+    Wrap torchaudio_contrib.complex_norm in an nn.Module.
+    """
+
+    def __init__(self, power=1.0):
+        super(ComplexNorm, self).__init__()
+        self.power = power
+
+    def forward(self, stft):
+        return complex_norm(stft, self.power)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(power={})'.format(self.power)
+
+
+class ApplyFilterbank(_ModuleNoStateBuffers):
+    """
+    Applies a filterbank transform.
+    """
+
+    def __init__(self, filterbank):
+        super(ApplyFilterbank, self).__init__()
+        self.register_buffer('filterbank', filterbank)
+
+    def forward(self, spect):
+        """
+        Args:
+            spect (Tensor): (channel, time, freq) or (batch, channel, time, freq).
+
+        Returns:
+            (Tensor): freq -> filterbank.size(0)
+        """
+        return apply_filterbank(spect, self.filterbank)
+
+
+class Filterbank(object):
+    """
+    Base class for providing a filterbank matrix.
+    """
+
+    def __init__(self):
+        super(Filterbank, self).__init__()
+
+    def get_filterbank(self):
+        raise NotImplementedError
+
+
+class MelFilterbank(Filterbank):
+    """
+    Provides a filterbank matrix to convert a spectrogram into a mel frequency spectrogram.
 
     Args:
-     * n_mels: int > 0 
-       -  Number of mel bands.
-       -  Default: 128
-     * sr: int > 0
-       -  Sampling rate of the audio signal. This may not be the same in all samples (?)
-       -  Default: 44100
-    * f_min: float > 0
-       -  Lowest freq. in Hz
-       -  Default: 0.
-    * f_max: float > 0
-       -  Highest freq. in Hz
-       -  Default: None (then use sr / 2.0)
-    * args: 
-       -  Positional arguments for Spectrogram
-    * kwargs: 
-       -  Keyword arguments for Spectrogram
+        num_bands (int): number of mel bins. Defaults to 128.
+        sample_rate (int): sample rate of audio signal. Defaults to 22050.
+        min_freq (float): minimum frequency. Defaults to 0.
+        max_freq (float, optional): maximum frequency. Defaults to sample_rate // 2.
+        num_bins (int, optional): number of filter banks from stft.
+            Defaults to 2048//2 + 1.
+        htk (bool, optional): use HTK formula instead of Slaney. Defaults to False.
     """
 
-    def __init__(self, n_mels=128, sr=44100, f_min=0.0, f_max=None, *args, **kwargs):
+    def __init__(self, num_bands=128, sample_rate=22050,
+                 min_freq=0.0, max_freq=None, num_bins=1025, htk=False):
 
-        super(Melspectrogram, self).__init__(*args, **kwargs)
-        self.sr = sr
-        self.n_mels = n_mels
-        self.mel_fb, self.mel_freq_vals = self._build_filter(sr, f_min, f_max)
+        super(MelFilterbank, self).__init__()
 
-    def _build_filter(self, sr, f_min, f_max):
-        # Get the mel filter matrix and the mel frequency values
-        mel_fb, mel_f = create_mel_filter(
-            self.n_fft//2 + 1,
-            sr,
-            n_mels=self.n_mels,
-            f_min=f_min,
-            f_max=f_max)
-        # Cast filter matrix as nn.Parameter so it's loaded on model's device
-        return nn.Parameter(mel_fb, requires_grad=False), mel_f
+        self.num_bands = num_bands
+        self.sample_rate = sample_rate
+        self.min_freq = min_freq
+        self.max_freq = max_freq if max_freq else sample_rate // 2
+        self.num_bins = num_bins
+        self.htk = htk
 
-    def forward(self, x):
+    def to_hertz(self, mel):
         """
-        Input Tensor shape -> (batch, channel, signal)
-        Output Tensor shape -> (batch, channel, mel_freq, time)
+        Converting mel values into frequency
         """
+        mel = torch.as_tensor(mel).float()
 
-        spec = super(Melspectrogram, self).forward(x)
-        spec = torch.matmul(spec.transpose(2, 3), self.mel_fb).transpose(2, 3)
-        return spec
+        if self.htk:
+            return 700. * (10**(mel / 2595.) - 1.)
+
+        f_min = 0.0
+        f_sp = 200.0 / 3
+        hz = f_min + f_sp * mel
+
+        min_log_hz = 1000.0
+        min_log_mel = (min_log_hz - f_min) / f_sp
+        logstep = math.log(6.4) / 27.0
+
+        return torch.where(mel >= min_log_mel, min_log_hz *
+                           torch.exp(logstep * (mel - min_log_mel)), hz)
+
+    def from_hertz(self, hz):
+        """
+        Converting frequency into mel values
+        """
+        hz = torch.as_tensor(hz).float()
+
+        if self.htk:
+            return 2595. * torch.log10(torch.tensor(1.) + (hz / 700.))
+
+        f_min = 0.0
+        f_sp = 200.0 / 3
+
+        mel = (hz - f_min) / f_sp
+
+        min_log_hz = 1000.0
+        min_log_mel = (min_log_hz - f_min) / f_sp
+        logstep = math.log(6.4) / 27.0
+
+        return torch.where(hz >= min_log_hz, min_log_mel +
+                           torch.log(hz / min_log_hz) / logstep, mel)
+
+    def get_filterbank(self):
+        return create_mel_filter(
+            num_bands=self.num_bands,
+            sample_rate=self.sample_rate,
+            min_freq=self.min_freq,
+            max_freq=self.max_freq,
+            num_bins=self.num_bins,
+            to_hertz=self.to_hertz,
+            from_hertz=self.from_hertz)
+
+    def __repr__(self):
+        param_str1 = '(num_bands={}, sample_rate={}'.format(
+            self.num_bands, self.sample_rate)
+        param_str2 = ', min_freq={}, max_freq={})'.format(
+            self.min_freq, self.max_freq)
+        return self.__class__.__name__ + param_str1 + param_str2
+
+
+class StretchSpecTime(_ModuleNoStateBuffers):
+    """
+    Stretch stft in time without modifying pitch for a given rate.
+
+    Args:
+
+        rate (float): rate to speed up or slow down by. Defaults to 1.
+        hop_len (int): Number audio of frames between STFT columns.
+            Defaults to 512.
+        num_bins (int, optional): number of filter banks from stft.
+            Defaults to 1025.
+    """
+
+    def __init__(self, rate=1., hop_len=512, num_bins=1025):
+
+        super(StretchSpecTime, self).__init__()
+
+        self.rate = rate
+        phi_advance = torch.linspace(
+            0, math.pi * hop_len, num_bins)[..., None]
+
+        self.register_buffer('phi_advance', phi_advance)
+
+    def forward(self, spect, rate=None):
+        if rate is None:
+            rate = self.rate
+        return phase_vocoder(spect, rate, self.phi_advance)
+
+    def __repr__(self):
+        param_str = '(rate={})'.format(self.rate)
+        return self.__class__.__name__ + param_str
+
+
+def Spectrogram(fft_len=2048, hop_len=None, frame_len=None,
+                window=None, pad=0, pad_mode="reflect", power=1., **kwargs):
+    """
+    Get spectrogram module.
+
+    Args:
+
+        fft_len (int): FFT window size. Defaults to 2048.
+        hop_len (int): Number audio of frames between STFT columns.
+            Defaults to fft_len // 4.
+        frame_len (int): Size of stft window. Defaults to fft_len.
+        window (Tensor): 1-D tensor.
+            Defaults to Hann Window of size frame_len.
+        pad (int): Amount of padding to apply to signal. Defaults to 0.
+        pad_mode: padding method (see torch.nn.functional.pad).
+            Defaults to "reflect".
+        power (float): Exponent of the magnitude. Defaults to 1.
+        **kwargs: Other torch.stft parameters, see torch.stft for more details.
+    """
+    return nn.Sequential(
+        STFT(
+            fft_len,
+            hop_len,
+            frame_len,
+            window,
+            pad,
+            pad_mode,
+            **kwargs),
+        ComplexNorm(power))
+
+
+def Melspectrogram(
+        num_bands=128,
+        sample_rate=22050,
+        min_freq=0.0,
+        max_freq=None,
+        num_bins=None,
+        htk=False,
+        mel_filterbank=None,
+        **kwargs):
+    """
+    Get melspectrogram module.
+
+    Args:
+        num_bands (int): number of mel bins. Defaults to 128.
+        sample_rate (int): sample rate of audio signal. Defaults to 22050.
+        min_freq (float): minimum frequency. Defaults to 0.
+        max_freq (float, optional): maximum frequency. Defaults to sample_rate // 2.
+        num_bins (int, optional): number of filter banks from stft.
+            Defaults to fft_len//2 + 1 if 'fft_len' in kwargs else 1025.
+        htk (bool, optional): use HTK formula instead of Slaney. Defaults to False.
+        mel_filterbank (class, optional): MelFilterbank class to build filterbank matrix
+        **kwargs: torchaudio_contrib.Spectrogram parameters.
+    """
+    fft_len = kwargs.get('fft_len', None)
+    num_bins = fft_len // 2 + 1 if fft_len else 1025
+
+    # Check if custom MelFilterbank is passed
+    if mel_filterbank is None:
+        mel_filterbank = MelFilterbank
+
+    mel_fb_matrix = mel_filterbank(
+        num_bands,
+        sample_rate,
+        min_freq,
+        max_freq,
+        num_bins,
+        htk).get_filterbank()
+
+    return nn.Sequential(*Spectrogram(power=2., **kwargs),
+                         ApplyFilterbank(mel_fb_matrix))
