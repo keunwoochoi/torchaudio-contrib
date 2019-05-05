@@ -176,7 +176,7 @@ def phase_vocoder(spect, rate, phi_advance):
     phase_acc = torch.cumsum(phase, -1)  # (new_bins, num_bins)
 
     mag = alphas * spect_1_norm + (1 - alphas) * \
-        spec_0_norm  # (time//rate+1, num_bins)
+        spect_0_norm  # (time//rate+1, num_bins)
 
     spect_stretch_real = mag * torch.cos(phase_acc)  # (new_bins, num_bins)
     spect_stretch_imag = mag * torch.sin(phase_acc)  # (new_bins, num_bins)
