@@ -17,7 +17,16 @@ Our motivation is:
 
 ## Contribution
 
-This is an early draft for a possible replacement of pytorch/audio. At this stage, we encourage interested users to discuss specific proposals in the [issue section](https://github.com/keunwoochoi/torchaudio-contrib/issues).
+Making things quicker and open! We're `-contrib` repo, hence it's *easy to enter but hard to graduate*. 
+
+ 1. Make a new [Issue](https://github.com/keunwoochoi/torchaudio-contrib/issues) for a potential PR
+ 2. Until it's in a good shape,
+    1. Make a PR with following the current conventions and unittest
+    2. Review-merge.
+ 3. Based on it, make a PR to [torch/audio](https://github.com/pytorch/audio)  
+ 
+ 
+ Discussion on how to contribute - https://github.com/keunwoochoi/torchaudio-contrib/issues/37
 
 ## Current issues/future work
 - Better module/sub-module hierarchy
@@ -107,7 +116,9 @@ class MuLawDecoding(n_quantize=256)
 def mu_law_decoding(x_mu, n_quantize=256)
 ```
 
-# Remove SoX Dependency
+----------
+
+# A Big Issue - Remove SoX Dependency
 
 We propose to remove the SoX dependency because:
 
@@ -141,7 +152,9 @@ def info(...)
 
 ### Installation
 
-`pip install -e .`
+```bash
+pip install -e .
+```
 
 
 ### Importing
@@ -150,4 +163,4 @@ import torchaudio_contrib
 
 
 ## Authors
-Keunwoo Choi, Faro Stöter, Kiran Sanjeevan
+Keunwoo Choi, Faro Stöter, Kiran Sanjeevan,  Jan Schlüter
