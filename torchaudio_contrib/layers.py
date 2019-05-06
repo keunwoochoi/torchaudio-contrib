@@ -3,7 +3,9 @@ import math
 import torch.nn as nn
 
 from .functional import stft, complex_norm, \
-    create_mel_filter, phase_vocoder, apply_filterbank
+    create_mel_filter, phase_vocoder, apply_filterbank, \
+    amplitude_to_db, db_to_amplitude, \
+    mu_law_encoding, mu_law_decoding
 
 
 class _ModuleNoStateBuffers(nn.Module):
@@ -337,3 +339,125 @@ def Melspectrogram(
 
     return nn.Sequential(*Spectrogram(power=2., **kwargs),
                          ApplyFilterbank(mel_fb_matrix))
+
+
+class AmplitudeToDb(_ModuleNoStateBuffers):
+    """
+    Amplitude-to-decibel conversion (logarithmic mapping with base=10)
+    By using `amin=1e-7`, it assumes 32-bit floating point input. If the
+    data precision differs, use approproate `amin` accordingly.
+
+    Args:
+        ref (float): Amplitude value that is equivalent to 0 decibel
+        amin (float): Minimum amplitude. Any input that is smaller than `amin` is
+            clamped to `amin`.
+    """
+
+    def __init__(self, ref=1.0, amin=1e-7):
+
+        super(AmplitudeToDb, self).__init__()
+        self.ref = ref
+        self.amin = amin
+        assert ref > amin, "Reference value is expected to be bigger than amin, but I have" \
+                           "ref:{} and amin:{}".format(ref, amin)
+
+    def forward(self, x):
+        """
+        Args:
+            x (Tensor): Input amplitude
+
+        Returns:
+            (Tensor): same size of x, after conversion
+        """
+        return amplitude_to_db(x, ref=self.ref, amin=self.amin)
+
+    def __repr__(self):
+        param_str = '(ref={}, amin={})'.format(self.ref, self.amin)
+        return self.__class__.__name__ + param_str
+
+
+class DbToAmplitude(_ModuleNoStateBuffers):
+    """
+    Decibel-to-amplitude conversion (exponential mapping with base=10)
+
+    Args:
+        x (Tensor): Input in decibel to be converted
+        ref (float): Amplitude value that is equivalent to 0 decibel
+
+    Returns:
+        (Tensor): same size of x, after conversion
+    """
+
+    def __init__(self, ref=1.0):
+
+        super(DbToAmplitude, self).__init__()
+        self.ref = ref
+
+    def forward(self, x):
+        """
+        Args:
+            x (Tensor): Input in decibel to be converted
+
+        Returns:
+            (Tensor): same size of x, after conversion
+        """
+        return db_to_amplitude(x, ref=self.ref)
+
+    def __repr__(self):
+        param_str = '(ref={})'.format(self.ref)
+        return self.__class__.__name__ + param_str
+
+
+class MuLawEncoding(_ModuleNoStateBuffers):
+    """Apply mu-law encoding to the input tensor.
+    Usually applied to waveforms
+
+    Args:
+        n_quantize (int): quantization level. For 8-bit encoding, set 256 (2 ** 8).
+
+    """
+
+    def __init__(self, n_quantize=256):
+        super(MuLawEncoding, self).__init__()
+        self.n_quantize = n_quantize
+
+    def forward(self, x):
+        """
+        Args:
+            x (Tensor): input value
+
+        Returns:
+            (Tensor): same size of x, after encoding
+        """
+        return mu_law_encoding(x, self.n_quantize)
+
+    def __repr__(self):
+        param_str = '(n_quantize={})'.format(self.n_quantize)
+        return self.__class__.__name__ + param_str
+
+
+class MuLawDecoding(_ModuleNoStateBuffers):
+    """Apply mu-law decoding (expansion) to the input tensor.
+    Usually applied to waveforms
+
+    Args:
+        n_quantize (int): quantization level. For 8-bit decoding, set 256 (2 ** 8).
+    """
+
+    def __init__(self, n_quantize=256):
+        super(MuLawDecoding, self).__init__()
+        self.n_quantize = n_quantize
+
+    def forward(self, x_mu):
+        """
+        Args:
+            x_mu (Tensor): mu-law encoded input
+
+        Returns:
+            (Tensor): mu-law decoded tensor
+        """
+        return mu_law_decoding(x_mu, self.n_quantize)
+
+    def __repr__(self):
+        param_str = '(n_quantize={})'.format(self.n_quantize)
+        return self.__class__.__name__ + param_str

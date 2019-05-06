@@ -5,18 +5,27 @@ import unittest
 import torch
 import torch.nn as nn
 from torchaudio_contrib.layers import STFT, ComplexNorm, \
-    ApplyFilterbank, Spectrogram, Melspectrogram, MelFilterbank
+    ApplyFilterbank, Spectrogram, Melspectrogram, MelFilterbank, \
+    AmplitudeToDb, DbToAmplitude, MuLawEncoding, MuLawDecoding
 
 
 def _num_stft_bins(signal_len, fft_len, hop_len, pad):
     return (signal_len + 2 * pad - fft_len + hop_len) // hop_len
 
 
-def _seed():
-    torch.manual_seed(1234)
+def _seed(seed=1234):
+    torch.manual_seed(seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(1234)
+        torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
+
+
+def _approx_all_equal(x, y, atol=1e-7):
+    return torch.all(torch.lt(torch.abs(torch.add(x, -y)), atol))
+
+
+def _all_equal(x, y):
+    return torch.all(torch.eq(x, y))
 
 
 class Tester(unittest.TestCase):
@@ -186,6 +195,89 @@ class Tester(unittest.TestCase):
 
         _test_mel_sd()
         _test_custom_fb()
+
+    def test_amplitude_db(self):
+        """test amplitude_to_db and db_to_amplitude"""
+
+        def _test_amplitude_to_db():
+            conversion_layer = AmplitudeToDb(ref=1.0)
+            amplitude = [0.01, 0.1, 1.0, 10.0]
+            db = [-20.0, -10.0, 0.0, 10.0]
+            assert _approx_all_equal(torch.Tensor(db),
+                                     conversion_layer(torch.Tensor(amplitude)))
+
+        def _test_db_to_amplitude():
+            conversion_layer = DbToAmplitude(ref=1.0)
+            amplitude = [0.000001, 0.0001, 0.1, 1.0, 10.0, 1000000.0]
+            db = [-60, -40.0, -10.0, 0.0, 10.0, 60.]
+            assert _approx_all_equal(torch.Tensor(amplitude),
+                                     conversion_layer(torch.Tensor(db)))
+
+        def _test_both_ways():
+            _seed()
+            amplitude = torch.rand(1, 1024) + 1e-7
+            db = 120 * torch.rand(1, 1024) - 60  # in [-60, 60]
+            amplitude_to_db = AmplitudeToDb()
+            db_to_amplitude = DbToAmplitude()
+
+            assert _approx_all_equal(db_to_amplitude(amplitude_to_db(amplitude)),
+                                     amplitude)
+            assert _approx_all_equal(amplitude_to_db(db_to_amplitude(db)),
+                                     db,
+                                     atol=1e-5)
+
+        _test_amplitude_to_db()
+        _test_db_to_amplitude()
+        _test_both_ways()
+
+    def test_mu_law(self):
+        """test mu-law encoding and decoding"""
+
+        def _test_mu_encoding():
+            _seed()
+            n_quantize = 256
+            encoding_layer = MuLawEncoding(n_quantize)
+
+            x = 2 * (torch.rand(1, 1024) - 0.5)  # in [-1, 1)
+            # manual computation
+            mu = torch.tensor(n_quantize - 1, dtype=x.dtype, requires_grad=False)
+            x_mu = x.sign() * torch.log1p(mu * x.abs()) / torch.log1p(mu)
+            x_mu = ((x_mu + 1) / 2 * mu + 0.5).long()
+
+            assert _all_equal(encoding_layer(x),
+                              x_mu)
+
+        def _test_mu_decoding():
+            _seed()
+            n_quantize = 256
+            decoding_layer = MuLawDecoding(n_quantize)
+
+            x_mu = torch.randint(low=0, high=n_quantize - 1,
+                                 size=(1, 1024))
+
+            # manual computation
+            x_mu = x_mu.to(torch.float)
+            mu = torch.tensor(n_quantize - 1, dtype=x_mu.dtype, requires_grad=False)  # confused about dtype here..
+            x = (x_mu / mu) * 2 - 1.
+            x = x.sign() * (torch.exp(x.abs() * torch.log1p(mu)) - 1.) / mu
+
+            assert _all_equal(decoding_layer(x_mu),
+                              x)
+
+        def _test_both_ways():
+            _seed()
+            n_quantize = 256
+            encoding_layer = MuLawEncoding(n_quantize)
+            decoding_layer = MuLawDecoding(n_quantize)
+
+            x_mu = torch.randint(low=0, high=n_quantize - 1,
+                                 size=(1, 1024))
+            assert _all_equal(x_mu,
+                              encoding_layer(decoding_layer(x_mu)))
+
+        _test_mu_encoding()
+        _test_mu_decoding()
+        _test_both_ways()
 
 
 if __name__ == '__main__':
