@@ -185,3 +185,74 @@ def phase_vocoder(spect, rate, phi_advance):
         [spect_stretch_real, spect_stretch_imag], dim=-1)
 
     return spect_stretch
+
+
+def amplitude_to_db(x, ref=1.0, amin=1e-7):
+    """
+    Amplitude-to-decibel conversion (logarithmic mapping with base=10)
+    By using `amin=1e-7`, it assumes 32-bit floating point input. If the
+    data precision differs, use approproate `amin` accordingly.
+
+    Args:
+        x (Tensor): Input amplitude
+        ref (float): Amplitude value that is equivalent to 0 decibel
+        amin (float): Minimum amplitude. Any input that is smaller than `amin` is
+            clamped to `amin`.
+    Returns:
+        (Tensor): same size of x, after conversion
+    """
+    x = torch.clamp(x, min=amin)
+    return 10.0 * (torch.log10(x) - torch.log10(torch.tensor(ref, device=x.device, requires_grad=False)))
+
+
+def db_to_amplitude(x, ref=1.0):
+    """
+    Decibel-to-amplitude conversion (exponential mapping with base=10)
+
+    Args:
+        x (Tensor): Input in decibel to be converted
+        ref (float): Amplitude value that is equivalent to 0 decibel
+
+    Returns:
+        (Tensor): same size of x, after conversion
+    """
+    return torch.pow(10.0, x / 10.0 + torch.log10(torch.tensor(ref, device=x.device, requires_grad=False)))
+
+
+def mu_law_encoding(x, n_quantize=256):
+    """Apply mu-law encoding to the input tensor.
+    Usually applied to waveforms
+
+    Args:
+        x (Tensor): input value
+        n_quantize (int): quantization level. For 8-bit encoding, set 256 (2 ** 8).
+
+    Returns:
+        (Tensor): same size of x, after encoding
+
+    """
+    if not x.dtype.is_floating_point:
+        x = x.to(torch.float)
+    mu = torch.tensor(n_quantize - 1, dtype=x.dtype, requires_grad=False)  # confused about dtype here..
+
+    x_mu = x.sign() * torch.log1p(mu * x.abs()) / torch.log1p(mu)
+    x_mu = ((x_mu + 1) / 2 * mu + 0.5).long()
+    return x_mu
+
+
+def mu_law_decoding(x_mu, n_quantize=256):
+    """Apply mu-law decoding (expansion) to the input tensor.
+
+    Args:
+        x_mu (Tensor): mu-law encoded input
+        n_quantize (int): quantization level. For 8-bit decoding, set 256 (2 ** 8).
+
+    Returns:
+        (Tensor): mu-law decoded tensor
+    """
+    if not x_mu.dtype.is_floating_point:
+        x_mu = x_mu.to(torch.float)
+    mu = torch.tensor(n_quantize - 1, dtype=x_mu.dtype, requires_grad=False)  # confused about dtype here..
+    x = (x_mu / mu) * 2 - 1.
+    x = x.sign() * (torch.exp(x.abs() * torch.log1p(mu)) - 1.) / mu
+    return x
