@@ -1,6 +1,9 @@
 """
 Test the layers. Currently only on cpu since travis doesn't have GPU.
 """
+from librosa import stft as librosa_stft
+from librosa import magphase as librosa_magphase
+
 import torch
 import torch.nn as nn
 from torchaudio_contrib.layers import STFT, ComplexNorm, \
@@ -60,8 +63,8 @@ class Tester(unittest.TestCase):
             assert complex_spec.dim() == waveform.dim() + 2
 
         def _test_values():
-            from librosa import stft as librosa_stft
-            from librosa import magphase as librosa_magphase
+            # from librosa import stft as librosa_stft
+            # from librosa import magphase as librosa_magphase
             # from numpy import allclose as np_allclose
             # from torchaudio_contrib.functional import magphase
             #
