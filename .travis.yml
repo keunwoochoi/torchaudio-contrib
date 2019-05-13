@@ -2,6 +2,6 @@ language: python
 python:
   - "3.5"
 install:
-  - python setup.py install
+  - pip install -e .[tests]
 script:
   - python -m unittest discover -s tests
