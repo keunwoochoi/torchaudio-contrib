@@ -4,13 +4,10 @@ Test the layers. Currently only on cpu since travis doesn't have GPU.
 import unittest
 import torch
 import torch.nn as nn
-import librosa
-import numpy as np
 from torchaudio_contrib.layers import STFT, ComplexNorm, \
     ApplyFilterbank, Spectrogram, Melspectrogram, MelFilterbank, \
     AmplitudeToDb, DbToAmplitude, MuLawEncoding, MuLawDecoding
 from torchaudio_contrib.functional import magphase
-
 
 
 def _num_stft_bins(signal_len, fft_len, hop_len, pad):
@@ -64,6 +61,9 @@ class Tester(unittest.TestCase):
             assert complex_spec.dim() == waveform.dim() + 2
 
         def _test_values():
+            import librosa
+            import numpy as np
+
             _seed()
             waveform = torch.randn(1, 10000)
             fft_len, hop_len = 512, 256
@@ -79,7 +79,7 @@ class Tester(unittest.TestCase):
             mag_spec_torch = mag_spec_torch.numpy()
 
             complex_spec_torch = complex_spec_torch.numpy()
-            complex_spec_torch = complex_spec_torch[:, :, :, 0] + 1j * complex_spec_torch[:, :, :, 1] # np.complex
+            complex_spec_torch = complex_spec_torch[:, :, :, 0] + 1j * complex_spec_torch[:, :, :, 1]  # np.complex
 
             assert np.allclose(mag_spec_torch, mag_spec_librosa, atol=1e-6)
             assert np.allclose(complex_spec_torch, complex_spec_librosa, atol=1e-5)
@@ -279,11 +279,12 @@ class Tester(unittest.TestCase):
             decoding_layer = MuLawDecoding(n_quantize)
 
             waveform_mu = torch.randint(low=0, high=n_quantize - 1,
-                                 size=(1, 1024))
+                                        size=(1, 1024))
 
             # manual computation
             waveform_mu = waveform_mu.to(torch.float)
-            mu = torch.tensor(n_quantize - 1, dtype=waveform_mu.dtype, requires_grad=False)  # confused about dtype here..
+            mu = torch.tensor(n_quantize - 1, dtype=waveform_mu.dtype,
+                              requires_grad=False)  # confused about dtype here..
             waveform = (waveform_mu / mu) * 2 - 1.
             waveform = waveform.sign() * (torch.exp(waveform.abs() * torch.log1p(mu)) - 1.) / mu
 
@@ -297,7 +298,7 @@ class Tester(unittest.TestCase):
             decoding_layer = MuLawDecoding(n_quantize)
 
             waveform_mu = torch.randint(low=0, high=n_quantize - 1,
-                                 size=(1, 1024))
+                                        size=(1, 1024))
             assert _all_equal(waveform_mu,
                               encoding_layer(decoding_layer(waveform_mu)))
 
