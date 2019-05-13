@@ -8,5 +8,6 @@ setup(name='torchaudio_contrib',
       author_email='gnuchoi@gmail.com',
       license='MIT',
       install_requires=['torch'],
+      extras_require={'tests': ['librosa']},
       packages=['torchaudio_contrib'],
       zip_safe=False)
