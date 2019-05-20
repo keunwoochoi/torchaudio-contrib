@@ -1,15 +1,20 @@
 """
 Test the layers. Currently only on cpu since travis doesn't have GPU.
 """
-from librosa import stft as librosa_stft # IT IS IMPORTANT TO IMPORT IT FIRST THEN TORCH
-from librosa import magphase as librosa_magphase
-
+import unittest
+import pytest
+import librosa
+import numpy as np
 import torch
 import torch.nn as nn
-from torchaudio_contrib.layers import STFT, ComplexNorm, \
-    ApplyFilterbank, Spectrogram, Melspectrogram, MelFilterbank, \
-    AmplitudeToDb, DbToAmplitude, MuLawEncoding, MuLawDecoding
-import unittest
+from torchaudio_contrib.layers import (
+    STFT, ComplexNorm, ApplyFilterbank, Spectrogram, Melspectrogram,
+    MelFilterbank, AmplitudeToDb, DbToAmplitude, MuLawEncoding, MuLawDecoding
+)
+from torchaudio_contrib.functional import magphase
+
+
+xfail = pytest.mark.xfail
 
 
 def _num_stft_bins(signal_len, fft_len, hop_len, pad):
@@ -31,65 +36,79 @@ def _all_equal(x, y):
     return torch.all(torch.eq(x, y))
 
 
+@pytest.mark.parametrize('fft_len', [512])
+@pytest.mark.parametrize('hop_len', [256])
+@pytest.mark.parametrize('waveform', [
+    (torch.randn(1, 100000)),
+    (torch.randn(1, 2, 100000)),
+    pytest.param(torch.randn(1, 100), marks=xfail(raises=RuntimeError)),
+])
+def test_STFT(waveform, fft_len, hop_len):
+    """
+    Test STFT for multi-channel signals.
+
+    Padding: Value in having padding outside of torch.stft?
+    """
+    layer = STFT(fft_len=fft_len, hop_len=hop_len)
+    complex_spec = layer(waveform)
+    mag_spec, phase_spec = magphase(complex_spec)
+
+    # == Test shape
+    expected_size = list(waveform.size()[:-1])
+    expected_size += [fft_len // 2 + 1, _num_stft_bins(
+        waveform.size(-1), fft_len, hop_len, fft_len // 2), 2]
+    assert complex_spec.size() == torch.Size(expected_size)
+    assert complex_spec.dim() == waveform.dim() + 2
+
+    # == Test values
+    fft_config = dict(n_fft=fft_len, hop_length=hop_len)
+    expected_complex_spec = np.apply_along_axis(librosa.stft, -1,
+                                                waveform.numpy(), **fft_config)
+    expected_mag_spec, _ = librosa.magphase(expected_complex_spec)
+    # Convert torch to np.complex
+    complex_spec = complex_spec.numpy()
+    complex_spec = complex_spec[..., 0] + 1j * complex_spec[..., 1]
+    assert np.allclose(complex_spec, expected_complex_spec, atol=1e-5)
+    assert np.allclose(mag_spec.numpy(), expected_mag_spec, atol=1e-5)
+
+
+@pytest.mark.parametrize('new_len', [120, 36])
+@pytest.mark.parametrize('mag_spec', [
+    torch.randn(1, 257, 391),
+    torch.randn(1, 2, 257, 391),
+])
+def test_ApplyFilterbank(mag_spec, new_len):
+    """
+    Test ApplyFilterbank to transpose input before applying filter.
+    """
+    filterbank = torch.randn(mag_spec.size(-2), new_len)
+    apply_filterbank = ApplyFilterbank(filterbank)
+    mag_spec_filterbanked = apply_filterbank(mag_spec)
+
+    assert mag_spec.size(-1) == mag_spec_filterbanked.size(-1)
+    assert mag_spec_filterbanked.size(-2) == new_len
+    assert mag_spec.dim() == mag_spec_filterbanked.dim()
+
+
+@pytest.mark.parametrize('amplitude,db', [
+    (torch.Tensor([0.000001, 0.0001, 0.1, 1.0, 10.0, 1000000.0]),
+     torch.Tensor([-60.0, -40.0, -10.0, 0.0, 10.0, 60.0]))
+])
+def test_amplitude_db(amplitude, db):
+    """Test amplitude_to_db and db_to_amplitude."""
+    amplitude_to_db = AmplitudeToDb(ref=1.0)
+    db_to_amplitude = DbToAmplitude(ref=1.0)
+    assert _approx_all_equal(db, amplitude_to_db(amplitude))
+    assert _approx_all_equal(amplitude, db_to_amplitude(db))
+    # both ways
+    assert _approx_all_equal(db_to_amplitude(amplitude_to_db(amplitude)),
+                             amplitude)
+    assert _approx_all_equal(amplitude_to_db(db_to_amplitude(db)),
+                             db,
+                             atol=1e-5)
+
+
 class Tester(unittest.TestCase):
-
-    def test_STFT(self):
-        """
-        STFT should handle mutlichannel signal correctly
-
-        Padding: Value in having padding outside of torch.stft?
-        """
-
-        def _test_mono_sizes_cpu():
-            _seed()
-            waveform = torch.randn(1, 100000)
-            fft_len, hop_len = 512, 256
-            layer = STFT(fft_len=fft_len, hop_len=hop_len)
-            complex_spec = layer(waveform)
-            assert complex_spec.size(0) == 1
-            assert complex_spec.size(1) == fft_len // 2 + 1
-            assert complex_spec.size(2) == _num_stft_bins(
-                waveform.size(-1), fft_len, hop_len, fft_len // 2)
-            assert complex_spec.dim() == waveform.dim() + 2
-
-        def _test_batch_multichannel_sizes_cpu():
-            _seed()
-            waveform = torch.randn(1, 2, 100000)
-            fft_len, hop_len = 512, 256
-            layer = STFT(fft_len=fft_len, hop_len=hop_len)
-            complex_spec = layer(waveform)
-
-            assert complex_spec.size(1) == waveform.size(1)
-            assert complex_spec.dim() == waveform.dim() + 2
-
-        def _test_values():
-
-            from numpy import allclose as np_allclose
-            from torchaudio_contrib.functional import magphase
-
-            _seed()
-            waveform = torch.randn(1, 10000)
-            fft_len, hop_len = 512, 256
-            layer = STFT(fft_len=fft_len, hop_len=hop_len)
-            complex_spec_torch = layer(waveform)  # (1, 257, 40, 2)
-            complex_spec_librosa = librosa_stft(waveform.numpy()[0],
-                                                n_fft=fft_len,
-                                                hop_length=hop_len)
-
-            mag_spec_torch, phase_spec_torch = magphase(complex_spec_torch)
-            mag_spec_librosa, phase_spec_librosa = librosa_magphase(complex_spec_librosa)
-
-            mag_spec_torch = mag_spec_torch.numpy()
-
-            complex_spec_torch = complex_spec_torch.numpy()
-            complex_spec_torch = complex_spec_torch[:, :, :, 0] + 1j * complex_spec_torch[:, :, :, 1]  # np.complex
-
-            assert np_allclose(mag_spec_torch, mag_spec_librosa, atol=1e-6)
-            assert np_allclose(complex_spec_torch, complex_spec_librosa, atol=1e-5)
-
-        _test_mono_sizes_cpu()
-        _test_batch_multichannel_sizes_cpu()
-        _test_values()
 
     def test_ComplexNorm(self):
         """
@@ -108,39 +127,6 @@ class Tester(unittest.TestCase):
 
         for p in [1., 2., 0.7]:
             _test_powers(p)
-
-    def test_ApplyFilterbank(self):
-        """
-        ApplyFilterbank should apply correct transpose to input before multiplying it by the filter
-        """
-
-        def _test_mono_cpu():
-            _seed()
-            new_len = 120
-            mag_spec = torch.randn(1, 257, 391)
-            filterbank = torch.randn(mag_spec.size(-2), new_len)
-
-            apply_filterbank = ApplyFilterbank(filterbank)
-            mag_spec_filterbanked = apply_filterbank(mag_spec)
-
-            assert mag_spec.size(-1) == mag_spec_filterbanked.size(-1)
-            assert mag_spec_filterbanked.size(-2) == new_len
-            assert mag_spec.dim() == mag_spec_filterbanked.dim()
-
-        def _test_multichannel_cpu():
-            _seed()
-            new_len = 120
-            mag_specs = torch.randn(1, 2, 257, 391)
-            filterbank = torch.randn(mag_specs.size(-2), new_len)
-
-            apply_filterbank = ApplyFilterbank(filterbank)
-            mag_specs_filterbanked = apply_filterbank(mag_specs)
-
-            assert mag_specs_filterbanked.size(-2) == new_len
-            assert mag_specs.dim() == mag_specs_filterbanked.dim()
-
-        _test_mono_cpu()
-        _test_multichannel_cpu()
 
     def test_Spectrogram(self):
         """
@@ -224,40 +210,6 @@ class Tester(unittest.TestCase):
 
         _test_mel_sd()
         _test_custom_fb()
-
-    def test_amplitude_db(self):
-        """test amplitude_to_db and db_to_amplitude"""
-
-        def _test_amplitude_to_db():
-            conversion_layer = AmplitudeToDb(ref=1.0)
-            amplitude = [0.01, 0.1, 1.0, 10.0]
-            db = [-20.0, -10.0, 0.0, 10.0]
-            assert _approx_all_equal(torch.Tensor(db),
-                                     conversion_layer(torch.Tensor(amplitude)))
-
-        def _test_db_to_amplitude():
-            conversion_layer = DbToAmplitude(ref=1.0)
-            amplitude = [0.000001, 0.0001, 0.1, 1.0, 10.0, 1000000.0]
-            db = [-60, -40.0, -10.0, 0.0, 10.0, 60.]
-            assert _approx_all_equal(torch.Tensor(amplitude),
-                                     conversion_layer(torch.Tensor(db)))
-
-        def _test_both_ways():
-            _seed()
-            amplitude = torch.rand(1, 1024) + 1e-7
-            db = 120 * torch.rand(1, 1024) - 60  # in [-60, 60]
-            amplitude_to_db = AmplitudeToDb()
-            db_to_amplitude = DbToAmplitude()
-
-            assert _approx_all_equal(db_to_amplitude(amplitude_to_db(amplitude)),
-                                     amplitude)
-            assert _approx_all_equal(amplitude_to_db(db_to_amplitude(db)),
-                                     db,
-                                     atol=1e-5)
-
-        _test_amplitude_to_db()
-        _test_db_to_amplitude()
-        _test_both_ways()
 
     def test_mu_law(self):
         """test mu-law encoding and decoding"""
