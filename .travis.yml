@@ -4,4 +4,4 @@ python:
 install:
   - pip install -e .[tests]
 script:
-  - python -m unittest discover -s tests
+  - python -m pytest
