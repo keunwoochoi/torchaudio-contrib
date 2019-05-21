@@ -87,8 +87,8 @@ class STFT(_ModuleNoStateBuffers):
             signal (Tensor): (channel, time) or (batch, channel, time).
 
         Returns:
-            spect (Tensor): (channel, time, freq, complex)
-                or (batch, channel, time, freq, complex).
+            spect (Tensor): (channel, freq, time, complex)
+                or (batch, channel, freq, time, complex).
         """
 
         spect = stft(signal, self.fft_len, self.hop_len, window=self.window,
@@ -130,7 +130,7 @@ class ApplyFilterbank(_ModuleNoStateBuffers):
     def forward(self, spect):
         """
         Args:
-            spect (Tensor): (channel, time, freq) or (batch, channel, time, freq).
+            spect (Tensor): (channel, freq, time) or (batch, channel, freq, time).
 
         Returns:
             (Tensor): freq -> filterbank.size(0)
@@ -233,40 +233,6 @@ class MelFilterbank(Filterbank):
         param_str2 = ', min_freq={}, max_freq={})'.format(
             self.min_freq, self.max_freq)
         return self.__class__.__name__ + param_str1 + param_str2
-
-
-class StretchSpecTime(_ModuleNoStateBuffers):
-    """
-    Stretch stft in time without modifying pitch for a given rate.
-
-    Args:
-
-        rate (float): rate to speed up or slow down by. Defaults to 1.
-        hop_len (int): Number audio of frames between STFT columns.
-            Defaults to 512.
-        num_bins (int, optional): number of filter banks from stft.
-            Defaults to 1025.
-    """
-
-    def __init__(self, rate=1., hop_len=512, num_bins=1025):
-
-        super(StretchSpecTime, self).__init__()
-
-        self.rate = rate
-        phi_advance = torch.linspace(
-            0, math.pi * hop_len, num_bins)[..., None]
-
-        self.register_buffer('phi_advance', phi_advance)
-
-    def forward(self, spect, rate=None):
-        if rate is None:
-            rate = self.rate
-        return phase_vocoder(spect, rate, self.phi_advance)
-
-    def __repr__(self):
-        param_str = '(rate={})'.format(self.rate)
-        return self.__class__.__name__ + param_str
-
 
 def Spectrogram(fft_len=2048, hop_len=None, frame_len=None,
                 window=None, pad=0, pad_mode="reflect", power=1., **kwargs):
