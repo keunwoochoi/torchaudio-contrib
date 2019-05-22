@@ -38,16 +38,18 @@ class StretchSpecTime(_ModuleNoStateBuffers):
         return self.__class__.__name__ + param_str
 
 
-class GaussianNoise(_ModuleNoStateBuffers):
+class AdditiveNoise(_ModuleNoStateBuffers):
     """
-    Apply gaussian noise to a spectrogram.
+    Add gaussian noise to a spectrogram.
 
     Args:
         scale (float or tensor): standard deviation of the distribution.
+            Determines its “width”, bigger scale will add more noise.
+            Defaults to 1.
     """
 
     def __init__(self, scale=1.):
-        super(GaussianNoise, self).__init__()
+        super(AdditiveNoise, self).__init__()
         self.scale = torch.as_tensor(scale)
         self.loc = torch.tensor(0.)
 
@@ -70,15 +72,20 @@ class GaussianNoise(_ModuleNoStateBuffers):
         return self.__class__.__name__ + param_str
 
 
-def apply_masking(spect, max_value, mask_value, axis):
+def mask_along_axis(spect, max_value, mask_value, axis):
+    """
+    Mask with as a given value along a specified axis (example
+    and channel independent).
+    """
 
-    assert axis in [2, 3]
+    if axis not in [2, 3]:
+        raise ValueError('Only Frequency and Time masking is supported')
 
-    v = torch.rand(spect.shape[:2]) * max_value
-    v_0 = torch.rand(spect.shape[:2]) * (spect.size(axis) - v)
+    value = torch.rand(spect.shape[:2]) * max_value
+    min_value = torch.rand(spect.shape[:2]) * (spect.size(axis) - value)
 
-    mask_start = (v_0.long()).unsqueeze(-1)
-    mask_end = (v_0.long() + v.long()).unsqueeze(-1)
+    mask_start = (min_value.long()).unsqueeze(-1)
+    mask_end = (min_value.long() + value.long()).unsqueeze(-1)
 
     mask = torch.arange(
         0, spect.size(axis)).repeat(
@@ -93,13 +100,17 @@ def apply_masking(spect, max_value, mask_value, axis):
     return spect
 
 
-def apply_masking_batch(spect, max_value, mask_value, axis):
+def mask_along_axis_batch(spect, max_value, mask_value, axis):
+    """
+    Mask with as a given value along a specified axis, across the
+    entire batch of examples.
+    """
 
-    v = torch.rand(1) * max_value
-    v_0 = torch.rand(1) * (spect.size(axis) - v)
+    value = torch.rand(1) * max_value
+    min_value = torch.rand(1) * (spect.size(axis) - value)
 
-    mask_start = (v_0.long()).squeeze()
-    mask_end = (v_0.long() + v.long()).squeeze()
+    mask_start = (min_value.long()).squeeze()
+    mask_end = (min_value.long() + value.long()).squeeze()
 
     if axis == 2:
         spect[:, :, mask_start:mask_end] = mask_value
@@ -113,16 +124,16 @@ def apply_masking_batch(spect, max_value, mask_value, axis):
 
 class _AxisMasking(_ModuleNoStateBuffers):
 
-    def __init__(self, max_value, axis, same_batch):
+    def __init__(self, max_value, axis, across_batch):
 
         super(_AxisMasking, self).__init__()
         self.max_value = max_value
         self.axis = axis
 
-        if same_batch:
-            self.masking = apply_masking_batch
+        if across_batch:
+            self.masking = mask_along_axis_batch
         else:
-            self.masking = apply_masking
+            self.masking = mask_along_axis
 
     def forward(self, spect, mask_value=0):
         return self.masking(spect, self.max_value, mask_value, self.axis)
@@ -135,12 +146,12 @@ class FrequencyMasking(_AxisMasking):
     Args:
         max_freq (int): maximum possible length of the mask.
             Uniformly sampled from [0, max_freq).
-        same_batch (bool): weather to apply the same mask to all
+        across_batch (bool): weather to apply the same mask to all
             the examples/channels in the batch. Defaults to False.
     """
 
-    def __init__(self, max_freq, same_batch=False):
-        super(FrequencyMasking, self).__init__(max_freq, 2, same_batch)
+    def __init__(self, max_freq, across_batch=False):
+        super(FrequencyMasking, self).__init__(max_freq, 2, across_batch)
 
 
 class TimeMasking(_AxisMasking):
@@ -150,9 +161,9 @@ class TimeMasking(_AxisMasking):
     Args:
         max_time (int): maximum possible length of the mask.
             Uniformly sampled from [0, max_time).
-        same_batch (bool): weather to apply the same mask to all
+        across_batch (bool): weather to apply the same mask to all
             the examples/channels in the batch. Defaults to False.
     """
 
-    def __init__(self, max_time, same_batch=False):
-        super(TimeMasking, self).__init__(max_time, 3, same_batch)
+    def __init__(self, max_time, across_batch=False):
+        super(TimeMasking, self).__init__(max_time, 3, across_batch)
