@@ -180,10 +180,10 @@ class MelFilterbank(Filterbank):
         """
         Converting mel values into frequency
         """
-        mel = torch.as_tensor(mel).float()
+        mel = torch.as_tensor(mel).type(torch.get_default_dtype())
 
         if self.htk:
-            return 700. * (10**(mel / 2595.) - 1.)
+            return 700. * (10 ** (mel / 2595.) - 1.)
 
         f_min = 0.0
         f_sp = 200.0 / 3
@@ -200,10 +200,10 @@ class MelFilterbank(Filterbank):
         """
         Converting frequency into mel values
         """
-        hz = torch.as_tensor(hz).float()
+        hz = torch.as_tensor(hz).type(torch.get_default_dtype())
 
         if self.htk:
-            return 2595. * torch.log10(torch.tensor(1.) + (hz / 700.))
+            return 2595. * torch.log10(torch.tensor(1., dtype=torch.get_default_dtype()) + (hz / 700.))
 
         f_min = 0.0
         f_sp = 200.0 / 3
@@ -249,7 +249,6 @@ class StretchSpecTime(_ModuleNoStateBuffers):
     """
 
     def __init__(self, rate=1., hop_len=512, num_bins=1025):
-
         super(StretchSpecTime, self).__init__()
 
         self.rate = rate
@@ -354,7 +353,6 @@ class AmplitudeToDb(_ModuleNoStateBuffers):
     """
 
     def __init__(self, ref=1.0, amin=1e-7):
-
         super(AmplitudeToDb, self).__init__()
         self.ref = ref
         self.amin = amin
@@ -389,7 +387,6 @@ class DbToAmplitude(_ModuleNoStateBuffers):
     """
 
     def __init__(self, ref=1.0):
-
         super(DbToAmplitude, self).__init__()
         self.ref = ref
 

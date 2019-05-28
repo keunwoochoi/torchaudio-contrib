@@ -164,9 +164,9 @@ def phase_vocoder(spect, rate, phi_advance):
     spect_1_norm = torch.norm(spect_1, dim=-1)  # (new_bins, num_bins)
 
     spect_phase = spect_1_angle - spect_0_angle - \
-        phi_advance  # (new_bins, num_bins)
+                  phi_advance  # (new_bins, num_bins)
     spect_phase = spect_phase - 2 * math.pi * \
-        torch.round(spect_phase / (2 * math.pi))  # (new_bins, num_bins)
+                  torch.round(spect_phase / (2 * math.pi))  # (new_bins, num_bins)
 
     # Compute Phase Accum
     phase = spect_phase + phi_advance  # (new_bins, num_bins)
@@ -176,7 +176,7 @@ def phase_vocoder(spect, rate, phi_advance):
     phase_acc = torch.cumsum(phase, -1)  # (new_bins, num_bins)
 
     mag = alphas * spect_1_norm + (1 - alphas) * \
-        spect_0_norm  # (time//rate+1, num_bins)
+          spect_0_norm  # (time//rate+1, num_bins)
 
     spect_stretch_real = mag * torch.cos(phase_acc)  # (new_bins, num_bins)
     spect_stretch_imag = mag * torch.sin(phase_acc)  # (new_bins, num_bins)
@@ -202,7 +202,10 @@ def amplitude_to_db(x, ref=1.0, amin=1e-7):
         (Tensor): same size of x, after conversion
     """
     x = torch.clamp(x, min=amin)
-    return 10.0 * (torch.log10(x) - torch.log10(torch.tensor(ref, device=x.device, requires_grad=False)))
+    return 10.0 * (torch.log10(x) - torch.log10(torch.tensor(ref,
+                                                             device=x.device,
+                                                             requires_grad=False,
+                                                             dtype=x.dtype)))
 
 
 def db_to_amplitude(x, ref=1.0):
@@ -216,7 +219,10 @@ def db_to_amplitude(x, ref=1.0):
     Returns:
         (Tensor): same size of x, after conversion
     """
-    return torch.pow(10.0, x / 10.0 + torch.log10(torch.tensor(ref, device=x.device, requires_grad=False)))
+    return torch.pow(10.0, x / 10.0 + torch.log10(torch.tensor(ref,
+                                                               device=x.device,
+                                                               requires_grad=False,
+                                                               dtype=x.dtype)))
 
 
 def mu_law_encoding(x, n_quantize=256):
@@ -240,18 +246,19 @@ def mu_law_encoding(x, n_quantize=256):
     return x_mu
 
 
-def mu_law_decoding(x_mu, n_quantize=256):
+def mu_law_decoding(x_mu, n_quantize=256, dtype=torch.get_default_dtype()):
     """Apply mu-law decoding (expansion) to the input tensor.
 
     Args:
         x_mu (Tensor): mu-law encoded input
         n_quantize (int): quantization level. For 8-bit decoding, set 256 (2 ** 8).
+        dtype: specifies `dtype` for the decoded value. Default: `torch.get_default_dtype()`
 
     Returns:
         (Tensor): mu-law decoded tensor
     """
     if not x_mu.dtype.is_floating_point:
-        x_mu = x_mu.to(torch.float)
+        x_mu = x_mu.to(dtype)
     mu = torch.tensor(n_quantize - 1, dtype=x_mu.dtype, requires_grad=False)  # confused about dtype here..
     x = (x_mu / mu) * 2 - 1.
     x = x.sign() * (torch.exp(x.abs() * torch.log1p(mu)) - 1.) / mu
