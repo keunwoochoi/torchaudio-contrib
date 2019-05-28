@@ -166,7 +166,6 @@ class MelFilterbank(Filterbank):
 
     def __init__(self, num_bands=128, sample_rate=22050,
                  min_freq=0.0, max_freq=None, num_bins=1025, htk=False):
-
         super(MelFilterbank, self).__init__()
 
         self.num_bands = num_bands
@@ -176,56 +175,13 @@ class MelFilterbank(Filterbank):
         self.num_bins = num_bins
         self.htk = htk
 
-    def to_hertz(self, mel):
-        """
-        Converting mel values into frequency
-        """
-        mel = torch.as_tensor(mel).type(torch.get_default_dtype())
-
-        if self.htk:
-            return 700. * (10 ** (mel / 2595.) - 1.)
-
-        f_min = 0.0
-        f_sp = 200.0 / 3
-        hz = f_min + f_sp * mel
-
-        min_log_hz = 1000.0
-        min_log_mel = (min_log_hz - f_min) / f_sp
-        logstep = math.log(6.4) / 27.0
-
-        return torch.where(mel >= min_log_mel, min_log_hz *
-                           torch.exp(logstep * (mel - min_log_mel)), hz)
-
-    def from_hertz(self, hz):
-        """
-        Converting frequency into mel values
-        """
-        hz = torch.as_tensor(hz).type(torch.get_default_dtype())
-
-        if self.htk:
-            return 2595. * torch.log10(torch.tensor(1., dtype=torch.get_default_dtype()) + (hz / 700.))
-
-        f_min = 0.0
-        f_sp = 200.0 / 3
-
-        mel = (hz - f_min) / f_sp
-
-        min_log_hz = 1000.0
-        min_log_mel = (min_log_hz - f_min) / f_sp
-        logstep = math.log(6.4) / 27.0
-
-        return torch.where(hz >= min_log_hz, min_log_mel +
-                           torch.log(hz / min_log_hz) / logstep, mel)
-
     def get_filterbank(self):
         return create_mel_filter(
             num_bands=self.num_bands,
-            sample_rate=self.sample_rate,
             min_freq=self.min_freq,
             max_freq=self.max_freq,
             num_bins=self.num_bins,
-            to_hertz=self.to_hertz,
-            from_hertz=self.from_hertz)
+            htk=self.htk)
 
     def __repr__(self):
         param_str1 = '(num_bands={}, sample_rate={}'.format(

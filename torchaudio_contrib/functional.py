@@ -3,6 +3,49 @@ import math
 import torch.nn.functional as F
 
 
+def _mel_to_hertz(mel, htk):
+    """
+    Converting mel values into frequency
+    """
+    mel = torch.as_tensor(mel).type(torch.get_default_dtype())
+
+    if htk:
+        return 700. * (10 ** (mel / 2595.) - 1.)
+
+    f_min = 0.0
+    f_sp = 200.0 / 3
+    hz = f_min + f_sp * mel
+
+    min_log_hz = 1000.0
+    min_log_mel = (min_log_hz - f_min) / f_sp
+    logstep = math.log(6.4) / 27.0
+
+    return torch.where(mel >= min_log_mel, min_log_hz *
+                       torch.exp(logstep * (mel - min_log_mel)), hz)
+
+
+def _hertz_to_mel(hz, htk):
+    """
+    Converting frequency into mel values
+    """
+    hz = torch.as_tensor(hz).type(torch.get_default_dtype())
+
+    if htk:
+        return 2595. * torch.log10(torch.tensor(1., dtype=torch.get_default_dtype()) + (hz / 700.))
+
+    f_min = 0.0
+    f_sp = 200.0 / 3
+
+    mel = (hz - f_min) / f_sp
+
+    min_log_hz = 1000.0
+    min_log_mel = (min_log_hz - f_min) / f_sp
+    logstep = math.log(6.4) / 27.0
+
+    return torch.where(hz >= min_log_hz, min_log_mel +
+                       torch.log(hz / min_log_hz) / logstep, mel)
+
+
 def stft(signal, fft_len, hop_len, window,
          pad=0, pad_mode="reflect", **kwargs):
     """
@@ -56,8 +99,7 @@ def complex_norm(tensor, power=1.0):
     return torch.norm(tensor, 2, -1).pow(power)
 
 
-def create_mel_filter(num_bands, sample_rate, min_freq,
-                      max_freq, num_bins, to_hertz, from_hertz):
+def create_mel_filter(num_bands, min_freq, max_freq, num_bins, htk):
     """
     Creates filter matrix to transform fft frequency bins
     into mel frequency bins.
@@ -65,26 +107,24 @@ def create_mel_filter(num_bands, sample_rate, min_freq,
 
     Args:
         num_bands (int): number of mel bins.
-        sample_rate (int): sample rate of audio signal.
         min_freq (float): minimum frequency.
         max_freq (float): maximum frequency.
         num_bins (int): number of filter banks from stft.
-        to_hertz (function): convert from mel freq to hertz
-        from_hertz (function): convert from hertz to mel freq
+        htk (bool): whether following htk-mel scale or not
 
     Returns:
         filterbank (Tensor): (num_bins, num_bands)
     """
     # Convert to find mel lower/upper bounds
-    m_min = from_hertz(min_freq)
-    m_max = from_hertz(max_freq)
+    m_min = _hertz_to_mel(min_freq, htk)
+    m_max = _hertz_to_mel(max_freq, htk)
 
     # Compute stft frequency values
     stft_freqs = torch.linspace(min_freq, max_freq, num_bins)
 
     # Find mel values, and convert them to frequency units
     m_pts = torch.linspace(m_min, m_max, num_bands + 2)
-    f_pts = to_hertz(m_pts)
+    f_pts = _mel_to_hertz(m_pts, htk)
     f_diff = f_pts[1:] - f_pts[:-1]  # (num_bands + 1)
 
     # (num_bins, num_bands + 2)
