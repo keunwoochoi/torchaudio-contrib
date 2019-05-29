@@ -76,6 +76,15 @@ def stft(signal, fft_len, hop_len, window,
 
     # (!) Only 3D, 4D, 5D padding with non-constant
     # padding are supported for now.
+
+    if signal.dim() == 2:
+        # This is added because otherwise F.pad does not work.
+        # Due to this manual padding, we use stft(center=False) below.
+        add_batch_dim = True
+        signal = signal.reshape((1,) + signal.shape)
+    else:
+        add_batch_dim = False
+
     if pad > 0:
         signal = F.pad(signal, (pad, pad), pad_mode)
 
@@ -84,8 +93,12 @@ def stft(signal, fft_len, hop_len, window,
     signal = signal.reshape(-1, signal.size(-1))
 
     spect = torch.stft(signal, fft_len, hop_len, window=window,
-                       win_length=window.size(0), **kwargs)
+                       win_length=window.size(0), center=False,
+                       **kwargs)
     spect = spect.reshape(leading_dims + spect.shape[1:])
+
+    if add_batch_dim:
+        spect = spect.reshape(spect.shape[1:])
 
     return spect
 

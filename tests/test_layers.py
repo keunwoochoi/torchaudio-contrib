@@ -43,25 +43,32 @@ def _all_equal(x, y):
     (torch.randn(1, 2, 100000)),
     pytest.param(torch.randn(1, 100), marks=xfail(raises=RuntimeError)),
 ])
-def test_STFT(waveform, fft_len, hop_len):
+@pytest.mark.parametrize('pad_mode', [
+    # 'constant',
+    'reflect',
+])
+def test_STFT(waveform, fft_len, hop_len, pad_mode):
     """
     Test STFT for multi-channel signals.
 
     Padding: Value in having padding outside of torch.stft?
     """
-    layer = STFT(fft_len=fft_len, hop_len=hop_len)
+    pad = fft_len // 2
+
+    layer = STFT(fft_len=fft_len, hop_len=hop_len, pad_mode=pad_mode, pad=pad)
     complex_spec = layer(waveform)
     mag_spec, phase_spec = magphase(complex_spec)
 
     # == Test shape
     expected_size = list(waveform.size()[:-1])
     expected_size += [fft_len // 2 + 1, _num_stft_bins(
-        waveform.size(-1), fft_len, hop_len, fft_len // 2), 2]
-    assert complex_spec.size() == torch.Size(expected_size)
+        waveform.size(-1), fft_len, hop_len, pad), 2]
     assert complex_spec.dim() == waveform.dim() + 2
+    assert complex_spec.size() == torch.Size(expected_size)
 
     # == Test values
-    fft_config = dict(n_fft=fft_len, hop_length=hop_len)
+    fft_config = dict(n_fft=fft_len, hop_length=hop_len, pad_mode=pad_mode)
+    # note that librosa *automatically* pad with fft_len // 2.
     expected_complex_spec = np.apply_along_axis(librosa.stft, -1,
                                                 waveform.numpy(), **fft_config)
     expected_mag_spec, _ = librosa.magphase(expected_complex_spec)
