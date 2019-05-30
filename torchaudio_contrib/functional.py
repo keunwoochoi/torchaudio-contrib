@@ -46,7 +46,7 @@ def _hertz_to_mel(hz, htk):
                        torch.log(hz / min_log_hz) / logstep, mel)
 
 
-def stft(signal, fft_len, hop_len, window,
+def stft(waveforms, fft_len, hop_len, window,
          pad=0, pad_mode="reflect", **kwargs):
     """
     Wrap torch.stft allowing for multi-channel stft.
@@ -77,107 +77,110 @@ def stft(signal, fft_len, hop_len, window,
     # (!) Only 3D, 4D, 5D padding with non-constant
     # padding are supported for now.
 
-    if signal.dim() == 2:
+    if waveforms.dim() == 2:
         # This is added because otherwise F.pad does not work.
         # Due to this manual padding, we use stft(center=False) below.
         add_batch_dim = True
-        signal = signal.reshape((1,) + signal.shape)
+        waveforms = waveforms.reshape((1,) + waveforms.shape)
     else:
         add_batch_dim = False
 
     if pad > 0:
-        signal = F.pad(signal, (pad, pad), pad_mode)
+        waveforms = F.pad(waveforms, (pad, pad), pad_mode)
 
-    leading_dims = signal.shape[:-1]
+    leading_dims = waveforms.shape[:-1]
 
-    signal = signal.reshape(-1, signal.size(-1))
+    waveforms = waveforms.reshape(-1, waveforms.size(-1))
 
-    spect = torch.stft(signal, fft_len, hop_len, window=window,
+    complex_specgrams = torch.stft(waveforms, fft_len, hop_len, window=window,
                        win_length=window.size(0), center=False,
                        **kwargs)
-    spect = spect.reshape(leading_dims + spect.shape[1:])
+    complex_specgrams = complex_specgrams.reshape(leading_dims + complex_specgrams.shape[1:])
 
     if add_batch_dim:
-        spect = spect.reshape(spect.shape[1:])
+        complex_specgrams = complex_specgrams.reshape(complex_specgrams.shape[1:])
 
-    return spect
+    return complex_specgrams
 
 
-def complex_norm(tensor, power=1.0):
+def complex_norm(complex_tensor, power=1.0):
     """
     Normalize complex input.
+
+    Args:
+        complex_tensor (Tensor): Tensor shape of (*, complex=2)
     """
     if power == 1.:
-        return torch.norm(tensor, 2, -1)
-    return torch.norm(tensor, 2, -1).pow(power)
+        return torch.norm(complex_tensor, 2, -1)
+    return torch.norm(complex_tensor, 2, -1).pow(power)
 
 
-def create_mel_filter(num_bands, min_freq, max_freq, num_bins, htk):
+def create_mel_filter(num_freqs, num_mels, min_freq, max_freq, htk):
     """
     Creates filter matrix to transform fft frequency bins
     into mel frequency bins.
     Equivalent to librosa.filters.mel(sample_rate, fft_len, htk=True, norm=None).
 
     Args:
-        num_bands (int): number of mel bins.
+        num_freqs (int): number of filter banks from stft.
+        num_mels (int): number of mel bins.
         min_freq (float): minimum frequency.
         max_freq (float): maximum frequency.
-        num_bins (int): number of filter banks from stft.
         htk (bool): whether following htk-mel scale or not
 
     Returns:
-        filterbank (Tensor): (num_bins, num_bands)
+        mel_filterbank (Tensor): (num_freqs, num_mels)
     """
     # Convert to find mel lower/upper bounds
     m_min = _hertz_to_mel(min_freq, htk)
     m_max = _hertz_to_mel(max_freq, htk)
 
     # Compute stft frequency values
-    stft_freqs = torch.linspace(min_freq, max_freq, num_bins)
+    stft_freqs = torch.linspace(min_freq, max_freq, num_freqs)
 
     # Find mel values, and convert them to frequency units
-    m_pts = torch.linspace(m_min, m_max, num_bands + 2)
+    m_pts = torch.linspace(m_min, m_max, num_mels + 2)
     f_pts = _mel_to_hertz(m_pts, htk)
-    f_diff = f_pts[1:] - f_pts[:-1]  # (num_bands + 1)
+    f_diff = f_pts[1:] - f_pts[:-1]  # (num_mels + 1)
 
-    # (num_bins, num_bands + 2)
+    # (num_freqs, num_mels + 2)
     slopes = f_pts.unsqueeze(0) - stft_freqs.unsqueeze(1)
 
-    down_slopes = (-1. * slopes[:, :-2]) / f_diff[:-1]  # (num_bins, num_bands)
-    up_slopes = slopes[:, 2:] / f_diff[1:]  # (num_bins, num_bands)
-    filterbank = torch.clamp(torch.min(down_slopes, up_slopes), min=0.)
+    down_slopes = (-1. * slopes[:, :-2]) / f_diff[:-1]  # (num_freqs, num_mels)
+    up_slopes = slopes[:, 2:] / f_diff[1:]  # (num_freqs, num_mels)
+    mel_filterbank = torch.clamp(torch.min(down_slopes, up_slopes), min=0.)
 
-    return filterbank
+    return mel_filterbank
 
 
-def apply_filterbank(spect, filterbank):
+def apply_filterbank(mag_specgrams, filterbank):
     """
     Transform spectrogram given a filterbank matrix.
 
     Args:
-        spect (Tensor): (batch, channel, num_bins, time)
-        filterbank (Tensor): (num_bins, num_bands)
+        mag_specgrams (Tensor): (batch, channel, num_freqs, time)
+        filterbank (Tensor): (num_freqs, num_bands)
 
     Returns:
         (Tensor): (batch, channel, num_bands, time)
     """
-    return torch.matmul(spect.transpose(-2, -1), filterbank).transpose(-2, -1)
+    return torch.matmul(mag_specgrams.transpose(-2, -1), filterbank).transpose(-2, -1)
 
 
-def angle(tensor):
+def angle(complex_tensor):
     """
     Return angle of a complex tensor with shape (*, 2).
     """
-    return torch.atan2(tensor[..., 1], tensor[..., 0])
+    return torch.atan2(complex_tensor[..., 1], complex_tensor[..., 0])
 
 
-def magphase(spect, power=1.):
+def magphase(complex_tensor, power=1.):
     """
     Separate a complex-valued spectrogram with shape (*,2)
     into its magnitude and phase.
     """
-    mag = complex_norm(spect, power)
-    phase = angle(spect)
+    mag = complex_norm(complex_tensor, power)
+    phase = angle(complex_tensor)
     return mag, phase
 
 
@@ -187,7 +190,7 @@ def phase_vocoder(spect, rate, phi_advance):
     without modifying pitch by a factor of `rate`.
 
     Args:
-        spect (Tensor): (batch, channel, num_bins, time, 2)
+        spect (Tensor): (batch, channel, num_bins, time, complex=2)
         rate (float): Speed-up factor
         phi_advance (Tensor): Expected phase advance in each bin. (num_bins, 1)
 

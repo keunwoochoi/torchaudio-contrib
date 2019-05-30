@@ -81,20 +81,20 @@ class STFT(_ModuleNoStateBuffers):
 
         return fft_len, hop_len, window
 
-    def forward(self, signal):
+    def forward(self, waveforms):
         """
         Args:
-            signal (Tensor): (channel, time) or (batch, channel, time).
+            waveforms (Tensor): (channel, time) or (batch, channel, time).
 
         Returns:
             spect (Tensor): (channel, time, freq, complex)
                 or (batch, channel, time, freq, complex).
         """
 
-        spect = stft(signal, self.fft_len, self.hop_len, window=self.window,
-                     pad=self.pad, pad_mode=self.pad_mode, **self.kwargs)
+        complex_specgrams = stft(waveforms, self.fft_len, self.hop_len, window=self.window,
+                                 pad=self.pad, pad_mode=self.pad_mode, **self.kwargs)
 
-        return spect
+        return complex_specgrams
 
     def __repr__(self):
         param_str = '(fft_len={}, hop_len={}, frame_len={})'.format(
@@ -111,8 +111,8 @@ class ComplexNorm(nn.Module):
         super(ComplexNorm, self).__init__()
         self.power = power
 
-    def forward(self, stft):
-        return complex_norm(stft, self.power)
+    def forward(self, complex_specgrams):
+        return complex_norm(complex_specgrams, self.power)
 
     def __repr__(self):
         return self.__class__.__name__ + '(power={})'.format(self.power)
@@ -127,15 +127,15 @@ class ApplyFilterbank(_ModuleNoStateBuffers):
         super(ApplyFilterbank, self).__init__()
         self.register_buffer('filterbank', filterbank)
 
-    def forward(self, spect):
+    def forward(self, mag_specgrams):
         """
         Args:
-            spect (Tensor): (channel, time, freq) or (batch, channel, time, freq).
+            mag_specgrams (Tensor): (channel, time, freq) or (batch, channel, time, freq).
 
         Returns:
             (Tensor): freq -> filterbank.size(0)
         """
-        return apply_filterbank(spect, self.filterbank)
+        return apply_filterbank(mag_specgrams, self.filterbank)
 
 
 class Filterbank(object):
@@ -155,40 +155,44 @@ class MelFilterbank(Filterbank):
     Provides a filterbank matrix to convert a spectrogram into a mel frequency spectrogram.
 
     Args:
-        num_bands (int): number of mel bins. Defaults to 128.
-        sample_rate (int): sample rate of audio signal. Defaults to 22050.
+        num_freqs (int, optional): number of filter banks from stft.
+            Defaults to 2048//2 + 1.
+        num_mels (int): number of mel bins. Defaults to 128.
         min_freq (float): minimum frequency. Defaults to 0.
         max_freq (float, optional): maximum frequency. Defaults to sample_rate // 2.
-        num_bins (int, optional): number of filter banks from stft.
-            Defaults to 2048//2 + 1.
+        sample_rate (int): sample rate of audio signal. Defaults to None.
         htk (bool, optional): use HTK formula instead of Slaney. Defaults to False.
     """
 
-    def __init__(self, num_bands=128, sample_rate=22050,
-                 min_freq=0.0, max_freq=None, num_bins=1025, htk=False):
+    def __init__(self, num_freqs=1025, num_mels=128,
+                 min_freq=0.0, max_freq=None, sample_rate=None, htk=False):
         super(MelFilterbank, self).__init__()
 
-        self.num_bands = num_bands
-        self.sample_rate = sample_rate
+        if sample_rate is None and max_freq is None:
+            raise ValueError('Either max_freq or sample_rate should be specified.'
+                             ', but both are None.')
+        self.num_freqs = num_freqs
+        self.num_mels = num_mels
         self.min_freq = min_freq
         self.max_freq = max_freq if max_freq else sample_rate // 2
-        self.num_bins = num_bins
         self.htk = htk
 
     def get_filterbank(self):
         return create_mel_filter(
-            num_bands=self.num_bands,
+            num_freqs=self.num_freqs,
+            num_mels=self.num_mels,
             min_freq=self.min_freq,
             max_freq=self.max_freq,
-            num_bins=self.num_bins,
             htk=self.htk)
 
     def __repr__(self):
-        param_str1 = '(num_bands={}, sample_rate={}'.format(
-            self.num_bands, self.sample_rate)
+        param_str1 = '(num_freqs={}, snum_mels={}'.format(
+            self.num_freqs, self.num_mels)
         param_str2 = ', min_freq={}, max_freq={})'.format(
             self.min_freq, self.max_freq)
-        return self.__class__.__name__ + param_str1 + param_str2
+        param_str3 = ', htk={}'.format(
+            self.htk)
+        return self.__class__.__name__ + param_str1 + param_str2 + param_str3
 
 
 class StretchSpecTime(_ModuleNoStateBuffers):
@@ -213,10 +217,21 @@ class StretchSpecTime(_ModuleNoStateBuffers):
 
         self.register_buffer('phi_advance', phi_advance)
 
-    def forward(self, spect, rate=None):
+    def forward(self, complex_specgrams, rate=None):
+        """
+
+        Args:
+            complex_specgrams (Tensor): complex spectrogram
+                (batch, channel, freq, time, complex=2)
+            rate (float or None)
+
+        Returns:
+            (Tensor): (batch, channel, num_bins, new_bins, 2) with new_bins = num_bins//rate+1
+
+        """
         if rate is None:
             rate = self.rate
-        return phase_vocoder(spect, rate, self.phi_advance)
+        return phase_vocoder(complex_specgrams, rate, self.phi_advance)
 
     def __repr__(self):
         param_str = '(rate={})'.format(self.rate)
@@ -255,11 +270,11 @@ def Spectrogram(fft_len=2048, hop_len=None, frame_len=None,
 
 
 def Melspectrogram(
-        num_bands=128,
+        num_mels=128,
         sample_rate=22050,
         min_freq=0.0,
         max_freq=None,
-        num_bins=None,
+        num_freqs=None,
         htk=False,
         mel_filterbank=None,
         **kwargs):
@@ -267,30 +282,31 @@ def Melspectrogram(
     Get melspectrogram module.
 
     Args:
-        num_bands (int): number of mel bins. Defaults to 128.
+        num_mels (int): number of mel bins. Defaults to 128.
         sample_rate (int): sample rate of audio signal. Defaults to 22050.
         min_freq (float): minimum frequency. Defaults to 0.
         max_freq (float, optional): maximum frequency. Defaults to sample_rate // 2.
-        num_bins (int, optional): number of filter banks from stft.
+        num_freqs (int, optional): number of filter banks from stft.
             Defaults to fft_len//2 + 1 if 'fft_len' in kwargs else 1025.
         htk (bool, optional): use HTK formula instead of Slaney. Defaults to False.
         mel_filterbank (class, optional): MelFilterbank class to build filterbank matrix
         **kwargs: torchaudio_contrib.Spectrogram parameters.
     """
     fft_len = kwargs.get('fft_len', None)
-    num_bins = fft_len // 2 + 1 if fft_len else 1025
+    num_freqs = fft_len // 2 + 1 if fft_len else 1025
+    # keunwoo: Why is num_freqs specified like this and not by the passed argument?
 
     # Check if custom MelFilterbank is passed
     if mel_filterbank is None:
         mel_filterbank = MelFilterbank
 
     mel_fb_matrix = mel_filterbank(
-        num_bands,
-        sample_rate,
-        min_freq,
-        max_freq,
-        num_bins,
-        htk).get_filterbank()
+        num_mels=num_mels,
+        sample_rate=sample_rate,
+        min_freq=min_freq,
+        max_freq=max_freq,
+        num_freqs=num_freqs,
+        htk=htk).get_filterbank()
 
     return nn.Sequential(*Spectrogram(power=2., **kwargs),
                          ApplyFilterbank(mel_fb_matrix))
