@@ -46,47 +46,55 @@ def _hertz_to_mel(hz, htk):
                        torch.log(hz / min_log_hz) / logstep, mel)
 
 
-def stft(waveforms, fft_len, hop_len=None, win_len=None, window=None,
+def stft(waveforms, fft_length, hop_length=None, win_length=None, window=None,
          center=True, pad_mode='reflect', normalized=False, onesided=True):
-    """
-    Wrap torch.stft allowing for waveforms that `.dim()` >= 3.
+    """Compute a short-time Fourier transform of the input waveform(s).
+    It wraps `torch.stft` but after reshaping the input audio
+    to allow for `waveforms` that `.dim()` >= 3.
+    It follows most of the `torch.stft` default value, but for `window`,
+    if it's not specified (`None`), it uses hann window.
 
     Args:
-        waveforms (Tensor): Tensor of audio of size (channel, time)
-            or (batch, channel, time).
-        fft_len (int): FFT window size. Defaults to 2048.
-        hop_len (int): Number audio of frames between stft columns.
-            Defaults to fft_len // 4.
-        win_len (int): Size of stft window. Defaults to fft_len.
-        window (Tensor): 1-D tensor. Defaults to Hann Window
-            of size frame_len.
-        pad_mode: padding method (see torch.nn.functional.pad).
-            Defaults to "reflect".
+        waveforms (Tensor): Tensor of audio signal of size `(*, channel, time)`
+        fft_length (int): FFT size [sample]
+        hop_length (int): Hop size [sample] between STFT frames.
+            Defaults to `fft_length // 4` (75%-overlapping windows) by `torch.stft`.
+        win_length (int): Size of STFT window.
+            Defaults to `fft_length` by `torch.stft`.
+        window (Tensor): 1-D Tensor.
+            Defaults to Hann Window of size `win_length` *unlike* `torch.stft`.
+        center (bool): Whether to pad `waveforms` on both sides so that the
+            `t`-th frame is centered at time `t * hop_length`.
+            Defaults to `True` by `torch.stft`.
+        pad_mode (str): padding method (see `torch.nn.functional.pad`).
+            Defaults to `'reflect'` by `torch.stft`.
         normalized (bool): Whether the results are normalized.
-        onesided (bool): Whether the half + 1 freq-bins are returned.
+            Defaults to `False` by `torch.stft`.
+        onesided (bool): Whether the half + 1 frequency bins are returned to remove
+            the symmetric part of STFT of real-valued signal.
+            Defaults to `True` by `torch.stft`.
 
     Returns:
-        Tensor: (batch, channel, num_bins, time, complex)
-            or (channel, num_bins, time, complex)
+        complex_specgrams (Tensor): `(*, channel, num_freqs, time, complex=2)`
 
     Example:
-        >>> waveforms = torch.randn(16, 2, 10000)
-        >>> # window_length <= fft_len
-        >>> window = torch.hamming_window(window_length=2048)
-        >>> x = stft(waveforms, 2048, 512, window)
+        >>> waveforms = torch.randn(16, 2, 10000)  # (batch, channel, time)
+        >>> x = stft(waveforms, 2048, 512)
         >>> x.shape
         torch.Size([16, 2, 1025, 20])
     """
-
-    # (!) Only 3D, 4D, 5D padding with non-constant
-    # padding are supported for now.
-
     leading_dims = waveforms.shape[:-1]
 
     waveforms = waveforms.reshape(-1, waveforms.size(-1))
 
-    complex_specgrams = torch.stft(waveforms, n_fft=fft_len, hop_length=hop_len,
-                                   win_length=win_len, window=window,
+    if window is None:
+        if win_length is None:
+            window = torch.hann_window(fft_length)
+        else:
+            window = torch.hann_window(win_length)
+
+    complex_specgrams = torch.stft(waveforms, n_fft=fft_length, hop_length=hop_length,
+                                   win_length=win_length, window=window,
                                    center=center, pad_mode=pad_mode, normalized=normalized,
                                    onesided=onesided)
     complex_specgrams = complex_specgrams.reshape(leading_dims + complex_specgrams.shape[1:])
@@ -95,13 +103,16 @@ def stft(waveforms, fft_len, hop_len=None, win_len=None, window=None,
 
 
 def complex_norm(complex_tensor, power=1.0):
-    """
-    Normalize complex input.
+    """Compute the norm of complex tensor input
 
     Args:
-        complex_tensor (Tensor): Tensor shape of (*, complex=2)
+        complex_tensor (Tensor): Tensor shape of `(*, complex=2)`
+        power (float): Power of the norm. Defaults to `1.0`.
+
+    Returns:
+        Tensor: norm of the input tensor, shape of `(*, )`
     """
-    if power == 1.:
+    if power == 1.0:
         return torch.norm(complex_tensor, 2, -1)
     return torch.norm(complex_tensor, 2, -1).pow(power)
 

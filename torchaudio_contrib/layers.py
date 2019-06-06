@@ -33,70 +33,66 @@ class _ModuleNoStateBuffers(nn.Module):
 
 
 class STFT(_ModuleNoStateBuffers):
-    """
-    Compute the stft transform of a multi-channel signal or
-    batch of multi-channel signals.
+    """Compute a short-time Fourier transform of the input waveform(s).
+    It essentially wraps `torch.stft` but after reshaping the input audio
+    to allow for `waveforms` that `.dim()` >= 3.
+    It follows most of the `torch.stft` default value, but for `window`,
+    if it's not specified (`None`), it uses hann window.
 
     Args:
-
-        fft_len (int): FFT window size. Defaults to 2048.
-        hop_len (int): Number audio of frames between stft columns.
-            Defaults to fft_len // 4.
-        win_len (int): Size of stft window. Defaults to fft_len.
-        window (Tensor): 1-D tensor. Defaults to Hann Window
-            of size frame_len.
-        pad_mode: padding method (see torch.nn.functional.pad).
-            Defaults to "reflect".
+        fft_length (int): FFT size [sample]
+        hop_length (int): Hop size [sample] between STFT frames.
+            Defaults to `fft_length // 4` (75%-overlapping windows) by `torch.stft`.
+        win_length (int): Size of STFT window.
+            Defaults to `fft_length` by `torch.stft`.
+        window (Tensor): 1-D Tensor.
+            Defaults to Hann Window of size `win_length` *unlike* `torch.stft`.
+        center (bool): Whether to pad `waveforms` on both sides so that the
+            `t`-th frame is centered at time `t * hop_length`.
+            Defaults to `True` by `torch.stft`.
+        pad_mode (str): padding method (see `torch.nn.functional.pad`).
+            Defaults to `'reflect'` by `torch.stft`.
         normalized (bool): Whether the results are normalized.
-        onesided (bool): Whether the half + 1 freq-bins are returned.
-
-
+            Defaults to `False` by `torch.stft`.
+        onesided (bool): Whether the half + 1 frequency bins are returned to remove
+            the symmetric part of STFT of real-valued signal.
+            Defaults to `True` by `torch.stft`.
     """
 
-    def __init__(self, fft_len, hop_len=None, win_len=None,
+    def __init__(self, fft_length, hop_length=None, win_length=None,
                  window=None, center=True, pad_mode='reflect',
                  normalized=False, onesided=True):
-
         super(STFT, self).__init__()
 
-        # Get default values, window so it can be registered as buffer
-        self.fft_len, self.hop_len, window = self._stft_defaults(
-            fft_len, hop_len, win_len, window)
+        self.fft_length = fft_length
+        self.hop_length = hop_length
+        self.win_length = win_length
 
-        self.win_len = win_len
         self.center = center
         self.pad_mode = pad_mode
         self.normalized = normalized
         self.onesided = onesided
 
-        self.register_buffer('window', window)
-
-    def _stft_defaults(self, fft_len, hop_len, win_len, window):
-        """
-        Handle default values for STFT.
-        """
-        hop_len = fft_len // 4 if hop_len is None else hop_len
-
         if window is None:
-            length = fft_len if win_len is None else win_len
-            window = torch.hann_window(length)
-        if not isinstance(window, torch.Tensor):
-            raise TypeError('window must be a of type torch.Tensor')
+            if win_length is None:
+                window = torch.hann_window(fft_length)
+            else:
+                window = torch.hann_window(win_length)
 
-        return fft_len, hop_len, window
+        self.register_buffer('window', window)
 
     def forward(self, waveforms):
         """
         Args:
-            waveforms (Tensor): (channel, time) or (batch, channel, time).
+            waveforms (Tensor): Tensor of audio signal of size `(*, channel, time)`
 
         Returns:
-            complex_specgrams (Tensor): (channel, time, freq, complex)
-                        or (batch, channel, time, freq, complex).
+            complex_specgrams (Tensor): `(*, channel, num_freqs, time, complex=2)`
         """
 
-        complex_specgrams = stft(waveforms, self.fft_len, self.hop_len,
-                                 win_len=self.win_len,
+        complex_specgrams = stft(waveforms, self.fft_length,
+                                 hop_length=self.hop_length,
+                                 win_length=self.win_length,
                                  window=self.window,
                                  center=self.center,
                                  pad_mode=self.pad_mode,
@@ -106,24 +102,34 @@ class STFT(_ModuleNoStateBuffers):
         return complex_specgrams
 
     def __repr__(self):
-        param_str1 = '(fft_len={}, hop_len={}, win_len={})'.format(
-            self.fft_len, self.hop_len, self.window.size(0))
+        param_str1 = '(fft_length={}, hop_length={}, win_length={})'.format(
+            self.fft_length, self.hop_length, self.win_length)
         param_str2 = '(center={}, pad_mode={}, normalized={}, onesided={})'.format(
             self.center, self.pad_mode, self.normalized, self.onesided)
         return self.__class__.__name__ + param_str1 + param_str2
 
 
 class ComplexNorm(nn.Module):
-    """
-    Wrap torchaudio_contrib.complex_norm in an nn.Module.
+    """Compute the norm of complex tensor input
+
+    Args:
+        power (float): Power of the norm. Defaults to `1.0`.
+
     """
 
     def __init__(self, power=1.0):
         super(ComplexNorm, self).__init__()
         self.power = power
 
-    def forward(self, complex_specgrams):
-        return complex_norm(complex_specgrams, self.power)
+    def forward(self, complex_tensor):
+        """
+        Args:
+            complex_tensor (Tensor): Tensor shape of `(*, complex=2)`
+
+        Returns:
+            Tensor: norm of the input tensor, shape of `(*, )`
+        """
+        return complex_norm(complex_tensor, self.power)
 
     def __repr__(self):
         return self.__class__.__name__ + '(power={})'.format(self.power)
@@ -249,32 +255,38 @@ class StretchSpecTime(_ModuleNoStateBuffers):
         return self.__class__.__name__ + param_str
 
 
-def Spectrogram(fft_len, hop_len=None, win_len=None,
+def Spectrogram(fft_length, hop_length=None, win_length=None,
                 window=None, center=True, pad_mode='reflect',
                 normalized=False, onesided=True, power=1.):
-    """
-    Get spectrogram module.
+    """Get spectrogram module, which is a Sequential module of
+        `[STFT(), ComplexNorm()]`.
 
     Args:
-
-        fft_len (int): FFT window size. Defaults to 2048.
-        hop_len (int): Number audio of frames between stft columns.
-            Defaults to fft_len // 4.
-        win_len (int): Size of stft window. Defaults to fft_len.
-        window (Tensor): 1-D tensor. Defaults to Hann Window
-            of size frame_len.
-        pad_mode: padding method (see torch.nn.functional.pad).
-            Defaults to "reflect".
+        fft_length (int): FFT size [sample]
+        hop_length (int): Hop size [sample] between STFT frames.
+            Defaults to `fft_length // 4` (75%-overlapping windows) by `torch.stft`.
+        win_length (int): Size of STFT window.
+            Defaults to `fft_length` by `torch.stft`.
+        window (Tensor): 1-D Tensor.
+            Defaults to Hann Window of size `win_length` *unlike* `torch.stft`.
+        center (bool): Whether to pad `waveforms` on both sides so that the
+            `t`-th frame is centered at time `t * hop_length`.
+            Defaults to `True` by `torch.stft`.
+        pad_mode (str): padding method (see `torch.nn.functional.pad`).
+            Defaults to `'reflect'` by `torch.stft`.
         normalized (bool): Whether the results are normalized.
-        onesided (bool): Whether the half + 1 freq-bins are returned.
-        power (float): Exponent of the magnitude. Defaults to 1.
+            Defaults to `False` by `torch.stft`.
+        onesided (bool): Whether the half + 1 frequency bins are returned to remove
+            the symmetric part of STFT of real-valued signal.
+            Defaults to `True` by `torch.stft`.
+        power (float): Exponent of the magnitude. Defaults to `1.0`.
 
     """
     return nn.Sequential(
         STFT(
-            fft_len,
-            hop_len,
-            win_len,
+            fft_length,
+            hop_length,
+            win_length,
             window,
             center,
             pad_mode,
@@ -306,8 +318,8 @@ def Melspectrogram(
         mel_filterbank (class, optional): MelFilterbank class to build filterbank matrix
         **kwargs: torchaudio_contrib.Spectrogram parameters.
     """
-    fft_len = kwargs.get('fft_len', None)
-    num_freqs = fft_len // 2 + 1 if fft_len else 1025
+    fft_length = kwargs.get('fft_length', None)
+    num_freqs = fft_length // 2 + 1 if fft_length else 1025
     # keunwoo: Why is num_freqs specified like this and not by the passed argument?
 
     # Check if custom MelFilterbank is passed

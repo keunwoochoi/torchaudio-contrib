@@ -54,8 +54,7 @@ def test_STFT(waveform, fft_len, hop_len, pad_mode):
     Padding: Value in having padding outside of torch.stft?
     """
     pad = fft_len // 2
-
-    layer = STFT(fft_len=fft_len, hop_len=hop_len, pad_mode=pad_mode)
+    layer = STFT(fft_length=fft_len, hop_length=hop_len, pad_mode=pad_mode)
     complex_spec = layer(waveform)
     mag_spec, phase_spec = magphase(complex_spec)
 
@@ -75,6 +74,9 @@ def test_STFT(waveform, fft_len, hop_len, pad_mode):
     # Convert torch to np.complex
     complex_spec = complex_spec.numpy()
     complex_spec = complex_spec[..., 0] + 1j * complex_spec[..., 1]
+    print('=' * 50)
+    print(complex_spec[:3, :3])
+    print(expected_complex_spec[:3, :3])
     assert np.allclose(complex_spec, expected_complex_spec, atol=1e-5)
     assert np.allclose(mag_spec.numpy(), expected_mag_spec, atol=1e-5)
 
@@ -144,7 +146,7 @@ class Tester(unittest.TestCase):
             _seed()
             fft_len, hop_len = 512, 256
             spectrogram_layer = Spectrogram(
-                fft_len=fft_len, hop_len=hop_len, power=1)
+                fft_length=fft_len, hop_length=hop_len, power=1)
             conv_layer = nn.Conv2d(channels, 16, 3)
             return nn.Sequential(spectrogram_layer, conv_layer)
 
@@ -168,12 +170,12 @@ class Tester(unittest.TestCase):
 
         def _create_toy_model(channels):
             _seed()
-            num_mels, sample_rate, fft_len, hop_len = 96, 22050, 512, 256
+            num_mels, sample_rate, fft_length, hop_length = 96, 22050, 512, 256
             mel_layer = Melspectrogram(
                 num_mels=num_mels,
                 sample_rate=sample_rate,
-                fft_len=fft_len,
-                hop_len=hop_len)
+                fft_length=fft_length,
+                hop_length=hop_length)
             conv_layer = nn.Conv2d(channels, 16, 3)
             return nn.Sequential(mel_layer, conv_layer)
 
