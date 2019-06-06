@@ -46,30 +46,34 @@ def _hertz_to_mel(hz, htk):
                        torch.log(hz / min_log_hz) / logstep, mel)
 
 
-def stft(waveforms, fft_len, hop_len, window,
-         pad=0, pad_mode="reflect", **kwargs):
+def stft(waveforms, fft_len, hop_len=None, win_len=None, window=None,
+         center=True, pad_mode='reflect', normalized=False, onesided=True):
     """
-    Wrap torch.stft allowing for multi-channel stft.
+    Wrap torch.stft allowing for waveforms that `.dim()` >= 3.
 
     Args:
-        signal (Tensor): Tensor of audio of size (channel, time)
+        waveforms (Tensor): Tensor of audio of size (channel, time)
             or (batch, channel, time).
-        fft_len (int): FFT window size.
-        hop_len (int): Number audio of frames between STFT columns.
-        window (Tensor): 1-D tensor.
-        pad (int): Amount of padding to apply to signal.
+        fft_len (int): FFT window size. Defaults to 2048.
+        hop_len (int): Number audio of frames between stft columns.
+            Defaults to fft_len // 4.
+        win_len (int): Size of stft window. Defaults to fft_len.
+        window (Tensor): 1-D tensor. Defaults to Hann Window
+            of size frame_len.
         pad_mode: padding method (see torch.nn.functional.pad).
-        **kwargs: Other torch.stft parameters, see torch.stft for more details.
+            Defaults to "reflect".
+        normalized (bool): Whether the results are normalized.
+        onesided (bool): Whether the half + 1 freq-bins are returned.
 
     Returns:
         Tensor: (batch, channel, num_bins, time, complex)
             or (channel, num_bins, time, complex)
 
     Example:
-        >>> signal = torch.randn(16, 2, 10000)
+        >>> waveforms = torch.randn(16, 2, 10000)
         >>> # window_length <= fft_len
         >>> window = torch.hamming_window(window_length=2048)
-        >>> x = stft(signal, 2048, 512, window)
+        >>> x = stft(waveforms, 2048, 512, window)
         >>> x.shape
         torch.Size([16, 2, 1025, 20])
     """
@@ -77,28 +81,15 @@ def stft(waveforms, fft_len, hop_len, window,
     # (!) Only 3D, 4D, 5D padding with non-constant
     # padding are supported for now.
 
-    if waveforms.dim() == 2:
-        # This is added because otherwise F.pad does not work.
-        # Due to this manual padding, we use stft(center=False) below.
-        add_batch_dim = True
-        waveforms = waveforms.reshape((1,) + waveforms.shape)
-    else:
-        add_batch_dim = False
-
-    if pad > 0:
-        waveforms = F.pad(waveforms, (pad, pad), pad_mode)
-
     leading_dims = waveforms.shape[:-1]
 
     waveforms = waveforms.reshape(-1, waveforms.size(-1))
 
-    complex_specgrams = torch.stft(waveforms, fft_len, hop_len, window=window,
-                       win_length=window.size(0), center=False,
-                       **kwargs)
+    complex_specgrams = torch.stft(waveforms, n_fft=fft_len, hop_length=hop_len,
+                                   win_length=win_len, window=window,
+                                   center=center, pad_mode=pad_mode, normalized=normalized,
+                                   onesided=onesided)
     complex_specgrams = complex_specgrams.reshape(leading_dims + complex_specgrams.shape[1:])
-
-    if add_batch_dim:
-        complex_specgrams = complex_specgrams.reshape(complex_specgrams.shape[1:])
 
     return complex_specgrams
 

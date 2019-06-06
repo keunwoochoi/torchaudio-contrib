@@ -55,7 +55,7 @@ def test_STFT(waveform, fft_len, hop_len, pad_mode):
     """
     pad = fft_len // 2
 
-    layer = STFT(fft_len=fft_len, hop_len=hop_len, pad_mode=pad_mode, pad=pad)
+    layer = STFT(fft_len=fft_len, hop_len=hop_len, pad_mode=pad_mode)
     complex_spec = layer(waveform)
     mag_spec, phase_spec = magphase(complex_spec)
 

@@ -42,39 +42,43 @@ class STFT(_ModuleNoStateBuffers):
         fft_len (int): FFT window size. Defaults to 2048.
         hop_len (int): Number audio of frames between stft columns.
             Defaults to fft_len // 4.
-        frame_len (int): Size of stft window. Defaults to fft_len.
+        win_len (int): Size of stft window. Defaults to fft_len.
         window (Tensor): 1-D tensor. Defaults to Hann Window
             of size frame_len.
-        pad (int): Amount of padding to apply to signal. Defaults to 0.
         pad_mode: padding method (see torch.nn.functional.pad).
             Defaults to "reflect".
-        **kwargs: Other torch.stft parameters, see torch.stft for more details.
+        normalized (bool): Whether the results are normalized.
+        onesided (bool): Whether the half + 1 freq-bins are returned.
+
 
     """
 
-    def __init__(self, fft_len=2048, hop_len=None, frame_len=None,
-                 window=None, pad=0, pad_mode="reflect", **kwargs):
+    def __init__(self, fft_len, hop_len=None, win_len=None,
+                 window=None, center=True, pad_mode='reflect',
+                 normalized=False, onesided=True):
 
         super(STFT, self).__init__()
 
         # Get default values, window so it can be registered as buffer
         self.fft_len, self.hop_len, window = self._stft_defaults(
-            fft_len, hop_len, frame_len, window)
+            fft_len, hop_len, win_len, window)
 
-        self.pad = pad
+        self.win_len = win_len
+        self.center = center
         self.pad_mode = pad_mode
-        self.kwargs = kwargs
+        self.normalized = normalized
+        self.onesided = onesided
 
         self.register_buffer('window', window)
 
-    def _stft_defaults(self, fft_len, hop_len, frame_len, window):
+    def _stft_defaults(self, fft_len, hop_len, win_len, window):
         """
         Handle default values for STFT.
         """
         hop_len = fft_len // 4 if hop_len is None else hop_len
 
         if window is None:
-            length = fft_len if frame_len is None else frame_len
+            length = fft_len if win_len is None else win_len
             window = torch.hann_window(length)
         if not isinstance(window, torch.Tensor):
             raise TypeError('window must be a of type torch.Tensor')
@@ -87,19 +91,26 @@ class STFT(_ModuleNoStateBuffers):
             waveforms (Tensor): (channel, time) or (batch, channel, time).
 
         Returns:
-            spect (Tensor): (channel, time, freq, complex)
-                or (batch, channel, time, freq, complex).
+            complex_specgrams (Tensor): (channel, time, freq, complex)
+                        or (batch, channel, time, freq, complex).
         """
 
-        complex_specgrams = stft(waveforms, self.fft_len, self.hop_len, window=self.window,
-                                 pad=self.pad, pad_mode=self.pad_mode, **self.kwargs)
+        complex_specgrams = stft(waveforms, self.fft_len, self.hop_len,
+                                 win_len=self.win_len,
+                                 window=self.window,
+                                 center=self.center,
+                                 pad_mode=self.pad_mode,
+                                 normalized=self.normalized,
+                                 onesided=self.onesided)
 
         return complex_specgrams
 
     def __repr__(self):
-        param_str = '(fft_len={}, hop_len={}, frame_len={})'.format(
+        param_str1 = '(fft_len={}, hop_len={}, win_len={})'.format(
             self.fft_len, self.hop_len, self.window.size(0))
-        return self.__class__.__name__ + param_str
+        param_str2 = '(center={}, pad_mode={}, normalized={}, onesided={})'.format(
+            self.center, self.pad_mode, self.normalized, self.onesided)
+        return self.__class__.__name__ + param_str1 + param_str2
 
 
 class ComplexNorm(nn.Module):
@@ -238,34 +249,37 @@ class StretchSpecTime(_ModuleNoStateBuffers):
         return self.__class__.__name__ + param_str
 
 
-def Spectrogram(fft_len=2048, hop_len=None, frame_len=None,
-                window=None, pad=0, pad_mode="reflect", power=1., **kwargs):
+def Spectrogram(fft_len, hop_len=None, win_len=None,
+                window=None, center=True, pad_mode='reflect',
+                normalized=False, onesided=True, power=1.):
     """
     Get spectrogram module.
 
     Args:
 
         fft_len (int): FFT window size. Defaults to 2048.
-        hop_len (int): Number audio of frames between STFT columns.
+        hop_len (int): Number audio of frames between stft columns.
             Defaults to fft_len // 4.
-        frame_len (int): Size of stft window. Defaults to fft_len.
-        window (Tensor): 1-D tensor.
-            Defaults to Hann Window of size frame_len.
-        pad (int): Amount of padding to apply to signal. Defaults to 0.
+        win_len (int): Size of stft window. Defaults to fft_len.
+        window (Tensor): 1-D tensor. Defaults to Hann Window
+            of size frame_len.
         pad_mode: padding method (see torch.nn.functional.pad).
             Defaults to "reflect".
+        normalized (bool): Whether the results are normalized.
+        onesided (bool): Whether the half + 1 freq-bins are returned.
         power (float): Exponent of the magnitude. Defaults to 1.
-        **kwargs: Other torch.stft parameters, see torch.stft for more details.
+
     """
     return nn.Sequential(
         STFT(
             fft_len,
             hop_len,
-            frame_len,
+            win_len,
             window,
-            pad,
+            center,
             pad_mode,
-            **kwargs),
+            normalized,
+            onesided),
         ComplexNorm(power))
 
 
