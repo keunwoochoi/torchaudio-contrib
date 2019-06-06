@@ -74,9 +74,7 @@ def test_STFT(waveform, fft_len, hop_len, pad_mode):
     # Convert torch to np.complex
     complex_spec = complex_spec.numpy()
     complex_spec = complex_spec[..., 0] + 1j * complex_spec[..., 1]
-    print('=' * 50)
-    print(complex_spec[:3, :3])
-    print(expected_complex_spec[:3, :3])
+
     assert np.allclose(complex_spec, expected_complex_spec, atol=1e-5)
     assert np.allclose(mag_spec.numpy(), expected_mag_spec, atol=1e-5)
 
