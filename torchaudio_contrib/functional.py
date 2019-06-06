@@ -1,6 +1,5 @@
 import torch
 import math
-import torch.nn.functional as F
 
 
 def _mel_to_hertz(mel, htk):
