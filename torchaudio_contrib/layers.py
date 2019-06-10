@@ -218,12 +218,14 @@ class TimeStretch(_ModuleNoStateBuffers):
 
     Args:
 
-        fixed_rate (float): rate to speed up or slow down by.
         hop_length (int): Number audio of frames between STFT columns.
         num_freqs (int, optional): number of filter banks from stft.
+        fixed_rate (float): rate to speed up or slow down by. 
+            Defaults to None (in which case a rate must be 
+            passed to the forward method per batch).
     """
 
-    def __init__(self, fixed_rate, hop_length, num_freqs):
+    def __init__(self, hop_length, num_freqs, fixed_rate=None):
         super(TimeStretch, self).__init__()
 
         self.fixed_rate = fixed_rate
@@ -246,6 +248,9 @@ class TimeStretch(_ModuleNoStateBuffers):
         """
         if overriding_rate is None:
             rate = self.fixed_rate
+            if rate is None:
+                raise ValueError("If no fixed_rate is specified"
+                    ", must pass a valid rate to the forward method.")
         else:
             rate = overriding_rate
 
@@ -255,7 +260,7 @@ class TimeStretch(_ModuleNoStateBuffers):
         return phase_vocoder(complex_specgrams, rate, self.phase_advance)
 
     def __repr__(self):
-        param_str = '(rate={})'.format(self.rate)
+        param_str = '(fixed_rate={})'.format(self.fixed_rate)
         return self.__class__.__name__ + param_str
 
 
