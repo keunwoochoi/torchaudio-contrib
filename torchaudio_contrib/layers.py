@@ -212,43 +212,47 @@ class MelFilterbank(Filterbank):
         return self.__class__.__name__ + param_str1 + param_str2 + param_str3
 
 
-class StretchSpecTime(_ModuleNoStateBuffers):
+class TimeStretch(_ModuleNoStateBuffers):
     """
     Stretch stft in time without modifying pitch for a given rate.
 
     Args:
 
-        rate (float): rate to speed up or slow down by. Defaults to 1.
-        hop_len (int): Number audio of frames between STFT columns.
-            Defaults to 512.
-        num_bins (int, optional): number of filter banks from stft.
-            Defaults to 1025.
+        fixed_rate (float): rate to speed up or slow down by.
+        hop_length (int): Number audio of frames between STFT columns.
+        num_freqs (int, optional): number of filter banks from stft.
     """
 
-    def __init__(self, rate=1., hop_len=512, num_bins=1025):
-        super(StretchSpecTime, self).__init__()
+    def __init__(self, fixed_rate, hop_length, num_freqs):
+        super(TimeStretch, self).__init__()
 
-        self.rate = rate
-        phi_advance = torch.linspace(
-            0, math.pi * hop_len, num_bins)[..., None]
+        self.fixed_rate = fixed_rate
+        phase_advance = torch.linspace(
+            0, math.pi * hop_length, num_freqs)[..., None]
 
-        self.register_buffer('phi_advance', phi_advance)
+        self.register_buffer('phase_advance', phase_advance)
 
-    def forward(self, complex_specgrams, rate=None):
+    def forward(self, complex_specgrams, overriding_rate=None):
         """
 
         Args:
             complex_specgrams (Tensor): complex spectrogram
-                (batch, channel, freq, time, complex=2)
-            rate (float or None)
+                (*, channel, freq, time, complex=2)
+            overriding_rate (float or None): speed up to apply to this batch.
+                If no rate is passed, use self.fixed_rate.
 
         Returns:
-            (Tensor): (batch, channel, num_bins, new_bins, 2) with new_bins = num_bins//rate+1
-
+            (Tensor): (*, channel, num_freqs, ceil(time/rate), complex=2)
         """
-        if rate is None:
-            rate = self.rate
-        return phase_vocoder(complex_specgrams, rate, self.phi_advance)
+        if overriding_rate is None:
+            rate = self.fixed_rate
+        else:
+            rate = overriding_rate
+
+        if rate == 1.0:
+            return complex_specgrams
+
+        return phase_vocoder(complex_specgrams, rate, self.phase_advance)
 
     def __repr__(self):
         param_str = '(rate={})'.format(self.rate)

@@ -9,7 +9,8 @@ import torch
 import torch.nn as nn
 from torchaudio_contrib.layers import (
     STFT, ComplexNorm, ApplyFilterbank, Spectrogram, Melspectrogram,
-    MelFilterbank, AmplitudeToDb, DbToAmplitude, MuLawEncoding, MuLawDecoding
+    MelFilterbank, AmplitudeToDb, DbToAmplitude, MuLawEncoding, MuLawDecoding,
+    TimeStretch
 )
 from torchaudio_contrib.functional import magphase
 
@@ -17,8 +18,8 @@ from torchaudio_contrib.functional import magphase
 xfail = pytest.mark.xfail
 
 
-def _num_stft_bins(signal_len, fft_len, hop_len, pad):
-    return (signal_len + 2 * pad - fft_len + hop_len) // hop_len
+def _num_stft_bins(signal_len, fft_len, hop_length, pad):
+    return (signal_len + 2 * pad - fft_len + hop_length) // hop_length
 
 
 def _seed(seed=1234):
@@ -37,7 +38,7 @@ def _all_equal(x, y):
 
 
 @pytest.mark.parametrize('fft_len', [512])
-@pytest.mark.parametrize('hop_len', [256])
+@pytest.mark.parametrize('hop_length', [256])
 @pytest.mark.parametrize('waveform', [
     (torch.randn(1, 100000)),
     (torch.randn(1, 2, 100000)),
@@ -47,26 +48,26 @@ def _all_equal(x, y):
     # 'constant',
     'reflect',
 ])
-def test_STFT(waveform, fft_len, hop_len, pad_mode):
+def test_STFT(waveform, fft_len, hop_length, pad_mode):
     """
     Test STFT for multi-channel signals.
 
     Padding: Value in having padding outside of torch.stft?
     """
     pad = fft_len // 2
-    layer = STFT(fft_length=fft_len, hop_length=hop_len, pad_mode=pad_mode)
+    layer = STFT(fft_length=fft_len, hop_length=hop_length, pad_mode=pad_mode)
     complex_spec = layer(waveform)
     mag_spec, phase_spec = magphase(complex_spec)
 
     # == Test shape
     expected_size = list(waveform.size()[:-1])
     expected_size += [fft_len // 2 + 1, _num_stft_bins(
-        waveform.size(-1), fft_len, hop_len, pad), 2]
+        waveform.size(-1), fft_len, hop_length, pad), 2]
     assert complex_spec.dim() == waveform.dim() + 2
     assert complex_spec.size() == torch.Size(expected_size)
 
     # == Test values
-    fft_config = dict(n_fft=fft_len, hop_length=hop_len, pad_mode=pad_mode)
+    fft_config = dict(n_fft=fft_len, hop_length=hop_length, pad_mode=pad_mode)
     # note that librosa *automatically* pad with fft_len // 2.
     expected_complex_spec = np.apply_along_axis(librosa.stft, -1,
                                                 waveform.numpy(), **fft_config)
@@ -113,6 +114,54 @@ def test_amplitude_db(amplitude, db):
     assert _approx_all_equal(amplitude_to_db(db_to_amplitude(db)),
                              db,
                              atol=1e-5)
+
+
+@pytest.mark.parametrize('rate', [0.5, 1.01, 1.3])
+@pytest.mark.parametrize('complex_specgrams', [
+    torch.randn(1, 2, 1025, 400, 2),
+    torch.randn(1, 1025, 400, 2)
+])
+@pytest.mark.parametrize('hop_length', [256])
+def test_TimeStretch(complex_specgrams, rate, hop_length):
+
+    class use_double_precision:
+        def __enter__(self):
+            self.default_dtype = torch.get_default_dtype()
+            torch.set_default_dtype(torch.float64)
+
+        def __exit__(self, type, value, traceback):
+            torch.set_default_dtype(self.default_dtype)
+
+    with use_double_precision():
+
+        complex_specgrams = complex_specgrams.type(torch.get_default_dtype())
+        # == Test shape
+        layer = TimeStretch(hop_length=hop_length,
+                            num_freqs=complex_specgrams.shape[-3],
+                            fixed_rate=rate)
+        complex_specgrams_stretch = layer(complex_specgrams)
+
+        expected_size = list(complex_specgrams.size())
+        expected_size[-2] = int(np.ceil(expected_size[-2] / rate))
+
+        assert complex_specgrams.dim() == complex_specgrams_stretch.dim()
+        assert complex_specgrams_stretch.size() == torch.Size(expected_size)
+
+        # == Test values
+        index = [0] * (complex_specgrams.dim() - 3) + [slice(None)] * 3
+        mono_complex_specgram = complex_specgrams[index].numpy()
+        mono_complex_specgram = mono_complex_specgram[..., 0] + \
+            mono_complex_specgram[..., 1] * 1j
+        expected_complex_stretch = librosa.core.phase_vocoder(
+            mono_complex_specgram,
+            rate=rate,
+            hop_length=hop_length)
+
+        complex_stretch = complex_specgrams_stretch[index].numpy()
+        complex_stretch = complex_stretch[..., 0] + \
+            1j * complex_stretch[..., 1]
+        assert np.allclose(complex_stretch,
+                           expected_complex_stretch, atol=1e-5)
 
 
 class Tester(unittest.TestCase):
