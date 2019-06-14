@@ -234,7 +234,8 @@ def phase_vocoder(complex_specgrams, rate, phase_advance):
     time_steps = torch.arange(0, complex_specgrams.size(
         -2), rate, device=complex_specgrams.device)
 
-    alphas = torch.remainder(time_steps, torch.tensor(1.))
+    alphas = torch.remainder(time_steps, 
+        torch.tensor(1., device=complex_specgrams.device))
     phase_0 = angle(complex_specgrams[time_slice + [slice(1)]])
 
     # Time Padding
