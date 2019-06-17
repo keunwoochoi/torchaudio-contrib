@@ -220,8 +220,8 @@ class TimeStretch(_ModuleNoStateBuffers):
 
         hop_length (int): Number audio of frames between STFT columns.
         num_freqs (int, optional): number of filter banks from stft.
-        fixed_rate (float): rate to speed up or slow down by. 
-            Defaults to None (in which case a rate must be 
+        fixed_rate (float): rate to speed up or slow down by.
+            Defaults to None (in which case a rate must be
             passed to the forward method per batch).
     """
 
@@ -250,7 +250,7 @@ class TimeStretch(_ModuleNoStateBuffers):
             rate = self.fixed_rate
             if rate is None:
                 raise ValueError("If no fixed_rate is specified"
-                    ", must pass a valid rate to the forward method.")
+                                 ", must pass a valid rate to the forward method.")
         else:
             rate = overriding_rate
 
