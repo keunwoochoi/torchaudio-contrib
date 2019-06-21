@@ -121,7 +121,7 @@ def complex_norm(complex_tensor, power=1.0):
         power (float): Power of the norm. Defaults to `1.0`.
 
     Returns:
-        Tensor: norm of the input tensor, shape of `(*, )`
+        Tensor: power of the normed input tensor, shape of `(*, )`
     """
     if power == 1.0:
         return torch.norm(complex_tensor, 2, -1)
@@ -234,7 +234,8 @@ def phase_vocoder(complex_specgrams, rate, phase_advance):
     time_steps = torch.arange(0, complex_specgrams.size(
         -2), rate, device=complex_specgrams.device)
 
-    alphas = torch.remainder(time_steps, torch.tensor(1.))
+    alphas = torch.remainder(time_steps,
+                             torch.tensor(1., device=complex_specgrams.device))
     phase_0 = angle(complex_specgrams[time_slice + [slice(1)]])
 
     # Time Padding
@@ -287,6 +288,7 @@ def amplitude_to_db(x, ref=1.0, amin=1e-7):
     Returns:
         (Tensor): same size of x, after conversion
     """
+    x = x.pow(2.)
     x = torch.clamp(x, min=amin)
     return 10.0 * (torch.log10(x) - torch.log10(torch.tensor(ref,
                                                              device=x.device,
@@ -305,10 +307,11 @@ def db_to_amplitude(x, ref=1.0):
     Returns:
         (Tensor): same size of x, after conversion
     """
-    return torch.pow(10.0, x / 10.0 + torch.log10(torch.tensor(ref,
-                                                               device=x.device,
-                                                               requires_grad=False,
-                                                               dtype=x.dtype)))
+    power_spec = torch.pow(10.0, x / 10.0 + torch.log10(torch.tensor(ref,
+                                                        device=x.device,
+                                                        requires_grad=False,
+                                                        dtype=x.dtype)))
+    return power_spec.pow(0.5)
 
 
 def mu_law_encoding(x, n_quantize=256):
