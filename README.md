@@ -1,4 +1,33 @@
+# SUNSETTING torcnaudio-contrib
+
+We made some progress in this repo and contributed to the original repo [pytorch/audio](https://github.com/pytorch/audio) which satisfied us. We happily stopped working here :) Please visit [pytorch/audio](https://github.com/pytorch/audio) for any issue/request!
+
+.
+
+.
+
+.
+
+.
+
+.
+
+.
+
+.
+
+.
+
+.
+
+.
+
+
+(We keep the existing content as below ⬇)
+
+
 # torchaudio-contrib
+
 
 Goal: To propose audio processing Pytorch codes with nice and easy-to-use APIs and functionality.
 
